@@ -28,6 +28,7 @@
 
 </div>
 
+
 ---
 
 > 官方实例：[@ParseHubot](https://t.me/ParseHubot)
@@ -138,6 +139,17 @@ platforms:
     cookies: # 该平台 Cookie 列表（随机选取）
       - "cookie_string_1"
       - "cookie_string_2"
+    cookie_files: # yt-dlp 导出的 Netscape Cookie 文件（可与 cookies 同时使用）
+      - "/path/to/www.youtube.com_cookies.txt"
+```
+
+`cookie_files` 支持环境变量和 `~` 展开；相对路径按 `platform_config.yaml` 所在目录解析。项目会在启动时读取
+Netscape 格式文件并转换为平台所需的 Cookie，Cookie 不会以明文写入日志。
+
+使用项目自带的 Docker Compose 部署时，`YTDLP_COOKIES_DIR` 会自动只读挂载到容器并映射为 `/app/cookies`：
+
+```bash
+docker compose up -d --build
 ```
 
 ### 🔀 代理优先级
@@ -283,4 +295,3 @@ uv run pytest
 **如果这个项目对你有帮助，欢迎点个 ⭐ Star!**
 
 </div>
-

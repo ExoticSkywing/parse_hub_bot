@@ -1,3 +1,4 @@
+import os
 import random
 from pathlib import Path
 
@@ -19,6 +20,33 @@ class MaskedSecretStr(SecretStr):
         return mask_secret(value)
 
 
+def _load_netscape_cookie_file(file: Path) -> str:
+    """将 yt-dlp 导出的 Netscape Cookie 文件转换为 Cookie 请求头字符串。"""
+    try:
+        content = file.read_text(encoding="utf-8")
+    except OSError as e:
+        raise ValueError(f"无法读取 Cookie 文件 [{file}]: {e}") from e
+
+    cookies: dict[str, str] = {}
+    for line in content.splitlines():
+        # Netscape 格式允许 #HttpOnly_ 开头的有效记录，其余 # 开头内容均为注释。
+        if line.startswith("#") and not line.startswith("#HttpOnly_"):
+            continue
+
+        fields = line.split("\t", 6)
+        if len(fields) < 7:
+            continue
+
+        name = fields[5].strip()
+        if name:
+            cookies[name] = fields[6].strip()
+
+    if not cookies:
+        raise ValueError(f"Cookie 文件 [{file}] 中未找到有效 Cookie")
+
+    return "; ".join(f"{name}={value}" for name, value in cookies.items())
+
+
 class Platform(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -27,6 +55,14 @@ class Platform(BaseModel):
     parser_proxies: list[AnyUrl] | None = None
     downloader_proxies: list[AnyUrl] | None = None
     cookies: list[MaskedSecretStr] | None = None
+    cookie_files: list[Path] | None = None
+
+    def model_post_init(self, __context: object) -> None:
+        if not self.cookie_files:
+            return
+
+        file_cookies = [MaskedSecretStr(_load_netscape_cookie_file(file)) for file in self.cookie_files]
+        self.cookies = [*(self.cookies or []), *file_cookies] or None
 
     @field_serializer("cookies")
     def serialize_cookies(self, cookies: list[SecretStr] | None) -> list[str] | None:
@@ -82,7 +118,14 @@ class PlatformsConfig(BaseModel):
                     continue
 
                 try:
-                    platforms[name] = Platform(**pdata)
+                    platform_data = dict(pdata)
+                    raw_cookie_files = platform_data.get("cookie_files")
+                    if raw_cookie_files is not None:
+                        platform_data["cookie_files"] = [
+                            cls._resolve_path(cookie_file, file.parent)
+                            for cookie_file in cls._2l(raw_cookie_files) or []
+                        ]
+                    platforms[name] = Platform(**platform_data)
                 except Exception as e:
                     logger.error(f"平台 [{name}] 配置错误:\n{e}")
                     raise SystemExit(1) from e
@@ -102,6 +145,11 @@ class PlatformsConfig(BaseModel):
         if isinstance(v, list):
             return v
         return [v]
+
+    @staticmethod
+    def _resolve_path(value: str | Path, base_dir: Path) -> Path:
+        path = Path(os.path.expanduser(os.path.expandvars(str(value))))
+        return path if path.is_absolute() else base_dir / path
 
     def get(self, platform_id: str) -> Platform | None:
         return self.platforms.get(platform_id)

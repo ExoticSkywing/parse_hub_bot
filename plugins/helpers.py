@@ -44,7 +44,7 @@ def build_start_text() -> LocaleContent:
         f"/cfg - 配置\n"
         f"/cfg <频道用户名/链接/id> - 频道配置\n"
         f"</blockquote>\n\n"
-        f"**开源地址: [GitHub](https://github.com/z-mio/parse_hub_bot)**"
+        f"**Source: @nebuluxe**"
     )
 
 

@@ -5,3 +5,4 @@
 .env
 *.session
 /data
+/docker-compose.override.yaml

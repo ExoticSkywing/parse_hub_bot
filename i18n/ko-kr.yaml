@@ -118,7 +118,7 @@ c1ecedab11bc: 원본
 c2236f70c559: 캐시 우회 파싱
 c25add78a072: "{t} \n```\n{error}```"
 c589bcdf2a2b: '\n\n**문제 피드백: @MisakaSisters**'
-c97827ba89ec: '**공유 링크를 보내어 파싱하세요**
+c134b0b0002a: '**공유 링크를 보내어 파싱하세요**
 
 
   **지원 플랫폼:**
@@ -145,7 +145,7 @@ c97827ba89ec: '**공유 링크를 보내어 파싱하세요**
   </blockquote>
 
 
-  **오픈소스 주소: [GitHub](https://github.com/z-mio/parse_hub_bot)**'
+  **Source: @nebuluxe**'
 d2282636abc7: 설정 패널
 d5631690265c: 설정 대상을 인식할 수 없습니다.
 d59c948c471c: 분석 중...

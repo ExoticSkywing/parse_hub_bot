@@ -138,6 +138,19 @@ platforms:
     cookies: # Cookie list for this platform (selected at random)
       - "cookie_string_1"
       - "cookie_string_2"
+    cookie_files: # Netscape Cookie files exported by yt-dlp (may be combined with cookies)
+      - "/path/to/www.youtube.com_cookies.txt"
+```
+
+`cookie_files` supports environment-variable and `~` expansion; relative paths are resolved from the directory
+containing `platform_config.yaml`. Netscape files are loaded at startup and converted to the Cookie format required
+by each platform. Cookie contents are never written to logs in plaintext.
+
+When using the bundled Docker Compose setup, `YTDLP_COOKIES_DIR` is mounted read-only into the container as
+`/app/cookies`:
+
+```bash
+docker compose up -d --build
 ```
 
 ### 🔀 Proxy Priority
