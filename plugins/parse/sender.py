@@ -327,7 +327,7 @@ async def send_raw(
     *,
     _t: PreLocaleSelector,
     custom_content: str = "",
-) -> None:
+) -> bool:
     """Raw 模式：将文件以原始文档形式上传。"""
     logger.debug("Raw 模式, 直接上传文件")
     await reporter.report(_t("上 传 中..."))
@@ -382,9 +382,10 @@ async def send_raw(
         logger.opt(exception=e).debug("详细堆栈")
         logger.error(f"Raw 模式上传失败: {e}")
         await reporter.report_error(_t("上传"), e)
-        return
+        return False
     else:
         await reporter.dismiss()
+        return True
     finally:
         result.cleanup()
 
@@ -396,7 +397,7 @@ async def send_zip(
     *,
     _t: PreLocaleSelector,
     custom_content: str = "",
-) -> None:
+) -> bool:
     logger.debug("Zip 模式, 开始打包")
     await reporter.report(_t("打 包 中..."))
     try:
@@ -408,7 +409,7 @@ async def send_zip(
         logger.opt(exception=e).debug("详细堆栈")
         logger.error(f"打包失败: {e}")
         await reporter.report_error(_t("打包"), Exception("..."))
-        return
+        return False
     finally:
         result.cleanup()
 
@@ -420,9 +421,10 @@ async def send_zip(
         logger.opt(exception=e).debug("详细堆栈")
         logger.error(f"上传失败: {e}")
         await reporter.report_error(_t("上传"), e)
-        return
+        return False
     else:
         await reporter.dismiss()
+        return True
     finally:
         if not bs.debug_skip_cleanup:
             logger.debug("清理压缩包")

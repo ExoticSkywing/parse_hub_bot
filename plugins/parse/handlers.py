@@ -8,6 +8,7 @@ from pyrogram.types import InputRichMessage, Message
 
 from core import bs
 from db import get_session
+from extensions.usage import track_parse
 from i18n import t_
 from log import logger
 from plugins.context import get_config_target
@@ -139,6 +140,7 @@ def _get_parse_user_id(req: ParseRequest) -> int | None:
     return req.chat_id
 
 
+@track_parse
 @parse_rate_limit(_get_parse_user_id)
 async def handle_parse(req: ParseRequest) -> bool:
     options = ParseOptions.from_mode(req.mode, bypass_cache=req.bypass_cache)
@@ -272,11 +274,9 @@ async def handle_parse(req: ParseRequest) -> bool:
             return True
 
         if req.mode == ParseMode.RAW:
-            await send_raw(sender, result, reporter, _t=req.t_, custom_content=req.custom_content)
-            return True
+            return await send_raw(sender, result, reporter, _t=req.t_, custom_content=req.custom_content)
         if req.mode == ParseMode.ZIP:
-            await send_zip(sender, result, reporter, _t=req.t_, custom_content=req.custom_content)
-            return True
+            return await send_zip(sender, result, reporter, _t=req.t_, custom_content=req.custom_content)
 
         logger.debug(f"开始上传媒体: media_count={len(result.processed_list)}")
         await reporter.report(req.t_("上 传 中..."))

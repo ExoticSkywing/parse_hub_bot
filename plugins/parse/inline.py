@@ -34,6 +34,7 @@ from pyrogram.types import (
 )
 
 from db import get_session
+from extensions.usage import track_inline_choice
 from i18n import t_
 from log import logger
 from plugins.filters import platform_filter
@@ -104,9 +105,11 @@ async def call_inline_parse(cli: Client, inline_query: InlineQuery) -> None:
 
 @Client.on_chosen_inline_result()
 @with_request_id
-async def inline_result_download(cli: Client, chosen_result: ChosenInlineResult) -> None:
+@track_inline_choice
+async def inline_result_download(cli: Client, chosen_result: ChosenInlineResult) -> bool:
     if not chosen_result.result_id.startswith("download_"):
-        return
+        # Telegram has already sent this direct/cached result when it reports the selection.
+        return True
 
     async with get_session() as session:
         lang = await UserService(session).get_lang(chosen_result.from_user.id)
@@ -115,7 +118,7 @@ async def inline_result_download(cli: Client, chosen_result: ChosenInlineResult)
     media_index = int(chosen_result.result_id.split("_")[1])
     inline_message_id = chosen_result.inline_message_id
     if inline_message_id is None:
-        return
+        return False
     query = chosen_result.query
     logger.debug(f"inline 下载触发: media_index={media_index}, query={query}")
     raw_url = await ParseService().get_raw_url(query)
@@ -127,7 +130,7 @@ async def inline_result_download(cli: Client, chosen_result: ChosenInlineResult)
     reporter = InlineStatusReporter(cli, inline_message_id, caption, t=_t, user_config=config)
     with ParsePipeline(query, raw_url, reporter, parse_result=cached_result, singleflight=False, t=_t) as pipeline:
         if (result := await pipeline.run()) is None:
-            return
+            return False
 
         parse_result = result.parse_result
         caption = build_caption(parse_result, config=config)
@@ -166,10 +169,12 @@ async def inline_result_download(cli: Client, chosen_result: ChosenInlineResult)
                 )
             )
             await cli.edit_inline_media(inline_message_id, media=media)
+            return True
         except Exception as e:
             logger.opt(exception=e).debug("详细堆栈")
             logger.error(f"inline 上传失败: {e}")
             await reporter.report_error(_t("上传"), e)
+            return False
         finally:
             logger.debug("inline 下载任务完成")
 
