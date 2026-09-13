@@ -108,6 +108,7 @@ async def observe_inline(_: Client, query: InlineQuery) -> None:
 async def admin_statistics(_: Client, msg: Message) -> None:
     if not is_admin(msg):
         return
+    assert msg.chat is not None  # Guaranteed by is_admin; retain the type narrowing here.
     command = msg.command or []
     if not command:
         return
@@ -118,7 +119,11 @@ async def admin_statistics(_: Client, msg: Message) -> None:
         or len(command[1]) > 19
         or not 0 < int(command[1]) <= 2**63 - 1
     ):
-        await msg.reply_text("用法：/user &lt;数字 Telegram ID&gt;", parse_mode=enums.ParseMode.HTML)
+        await msg.reply_text(
+            "用法：/user &lt;数字 Telegram ID&gt;\n"
+            f"例如：<code>/user {msg.chat.id}</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )
         return
     try:
         if command[0] == "stats":

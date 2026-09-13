@@ -10,6 +10,7 @@ from pyrogram.types import BotCommand
 from core import bs, on_connect, on_disconnect, ws
 from db.engine import close_db
 from db.init import init_db
+from extensions.usage_menu import set_admin_menu
 from i18n import ISO639_MAP
 from log import logger, setup_logging
 from plugins.helpers import COMMANDS
@@ -51,6 +52,7 @@ class Bot(Client):
         parse_cache.start_cleanup()
         await super().start(*args, **kwargs)
         await self.set_menu()
+        await set_admin_menu(self)
         return self
 
     async def stop(self, *args: Any, **kwargs: Any) -> None:

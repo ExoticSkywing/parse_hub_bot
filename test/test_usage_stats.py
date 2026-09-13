@@ -248,6 +248,19 @@ def test_timezone_and_safe_user_output(stats: UsageStore, monkeypatch: pytest.Mo
     assert "暂无已完成请求" == usage_stats.success_rate(0, 0)
 
 
+def test_user_menu_command_shows_usage_without_querying(stats: UsageStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    query = Mock()
+    monkeypatch.setattr(stats, "user_report", query)
+    msg = SimpleNamespace(
+        from_user=actor(), chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
+        command=["user"], reply_text=AsyncMock(),
+    )
+    asyncio.run(usage_stats.admin_statistics(None, msg))
+    query.assert_not_called()
+    text = msg.reply_text.call_args.args[0]
+    assert "用法" in text and "<code>/user 123</code>" in text
+
+
 def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite://")

@@ -20,6 +20,13 @@ USAGE_TIMEZONE=UTC
 - `/stats`：统计启用时间、累计接触用户、今日和近 7 天活跃、累计及今日请求、成功率。
 - `/user 1861667385`：某个账号首次接触、最近使用、累计请求和近期请求时间、结果。
 
+启动时自动为已配置管理员设置专属私聊菜单，保留原有命令并追加 `/stats`、`/user`；
+公共菜单不变。专属菜单使用机器人默认语言，新增统计命令使用中文说明。
+点击 `/stats` 可直接查询；点击 `/user` 会提示用法，按示例补上数字 ID 再发送。
+Telegram 客户端可能需要关闭并重新打开聊天才显示更新后的菜单。
+管理员需先与机器人建立私聊；若日志提示菜单设置失败，可在建立私聊后重启机器人重试，
+期间仍可手动发送命令。菜单只提供入口，查询权限仍由每次请求的管理员校验控制。
+
 `/user` 最多显示最近 10 条请求。原用户表的登记时间单独展示，不作为首次使用时间；
 `/stats` 单独展示统计启用前已登记的账号数量，不与新统计的用户数相加，避免重复计算。
 
@@ -53,11 +60,13 @@ USAGE_TIMEZONE=UTC
 
 - `extensions/usage_store.py`：独立存储、累计计数、明细清理。
 - `extensions/usage.py`：统计装饰器、管理员与时区配置。
+- `extensions/usage_menu.py`：管理员专属私聊菜单，不修改公共命令列表。
 - `plugins/usage_stats.py`：联系人观察和管理员命令，通过插件机制自动加载。
 
-上游代码仅接入三个文件：`plugins/parse/handlers.py` 的请求装饰器及 Raw/ZIP 结果透传，
-`plugins/parse/sender.py` 的 Raw/ZIP 布尔结果，`plugins/parse/inline.py` 的内联结果装饰器和布尔结果。
-同步上游后重点检查这三个接入点是否仍然保留，运行 `test/test_usage_stats.py`。
+上游代码仅接入四个文件：`plugins/parse/handlers.py` 的请求装饰器及 Raw/ZIP 结果透传，
+`plugins/parse/sender.py` 的 Raw/ZIP 布尔结果，`plugins/parse/inline.py` 的内联结果装饰器和布尔结果，
+以及 `bot.py` 在公共菜单初始化后调用管理员菜单设置。
+同步上游后重点检查这四个接入点是否仍然保留，运行 `test/test_usage_stats.py` 和 `test/test_usage_menu.py`。
 
 部署：
 
