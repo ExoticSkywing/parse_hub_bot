@@ -5,7 +5,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from pyrogram import enums
+from pyrogram import enums, raw
 from pyrogram.errors import MessageNotModified
 
 from extensions import usage_store
@@ -68,13 +68,18 @@ def test_list_detail_and_return_keep_page(stats: UsageStore, monkeypatch: pytest
     keyboard = call.kwargs["reply_markup"].inline_keyboard
     assert [button.text for button in keyboard[-1]] == ["上一页", "刷新", "下一页"]
     assert [button.callback_data for button in keyboard[-1]] == ["usage:page:0", "usage:page:1", "usage:page:2"]
+    for row in keyboard[:-1]:
+        user_id = int(row[0].callback_data.split(":")[2])
+        assert row[1].text == "打开主页" and row[1].url == f"tg://user?id={user_id}"
     query.data = keyboard[0][0].callback_data
     expected_id = int(query.data.split(":")[2])
     detail = AsyncMock(return_value="user detail")
     monkeypatch.setattr(usage_stats, "user_detail", detail)
     asyncio.run(usage_stats.admin_user_navigation(None, query))
     detail.assert_awaited_once_with(expected_id)
-    back = query.message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+    detail_keyboard = query.message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard
+    assert detail_keyboard[0][0].url == f"tg://user?id={expected_id}"
+    back = detail_keyboard[-1][0]
     assert back.callback_data == "usage:page:1"
     query.data = back.callback_data
     asyncio.run(usage_stats.admin_user_navigation(None, query))
@@ -155,7 +160,27 @@ def test_telegram_limits_and_paging_buttons(stats: UsageStore) -> None:
         assert len(text.encode("utf-16-le")) // 2 < 4096
         for row in markup.inline_keyboard:
             for button in row:
-                assert isinstance(button.callback_data, str)
-                assert len(button.callback_data.encode()) <= 64
+                if button.url is not None:
+                    assert button.url.startswith("tg://user?id=")
+                    assert button.callback_data is None
+                else:
+                    assert isinstance(button.callback_data, str)
+                    assert len(button.callback_data.encode()) <= 64
         navigation = [button.text for button in markup.inline_keyboard[-1]]
         assert navigation == (["刷新", "下一页"] if page == 0 else ["上一页", "刷新"])
+
+
+@pytest.mark.parametrize("user_id", [123, 5_000_000_001, 2**63 - 1])
+def test_profile_link_serializes_without_peer_lookup(user_id: int) -> None:
+    cli: Any = SimpleNamespace(resolve_peer=AsyncMock(side_effect=RuntimeError("unknown peer")), invoke=AsyncMock())
+    button = usage_stats.profile_button(user_id)
+
+    async def serialize() -> Any:
+        return await button.write(cli)
+
+    value = asyncio.run(serialize())
+    assert isinstance(value, raw.types.KeyboardButtonUrl)
+    assert value.url == f"tg://user?id={user_id}"
+    assert value.text == "打开主页"
+    cli.resolve_peer.assert_not_awaited()
+    cli.invoke.assert_not_awaited()

@@ -100,6 +100,11 @@ def format_user(user_id: int, data: dict[str, Any] | None, registered: datetime 
     return "\n".join(lines)
 
 
+def profile_button(user_id: int) -> InlineKeyboardButton:
+    # Use a supported deep link; do not resolve peers while rendering statistics.
+    return InlineKeyboardButton("打开主页", url=f"tg://user?id={user_id}")
+
+
 def format_users(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
     page = data["page"]
     lines = [
@@ -114,9 +119,14 @@ def format_users(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
             f"\n{position}. <code>{user_id}</code> · 解析 {user['requests']} 次\n"
             f"最近使用：{format_time(user['last_seen'])}"
         )
-        buttons.append([InlineKeyboardButton(f"查看 {user_id}", callback_data=f"usage:user:{user_id}:{page}")])
+        buttons.append(
+            [
+                InlineKeyboardButton(f"查看 {user_id}", callback_data=f"usage:user:{user_id}:{page}"),
+                profile_button(user_id),
+            ]
+        )
     if data["users"]:
-        lines.append("\n点击下方用户查看详情。仅列出统计启用后接触过的用户，按最近使用排序。")
+        lines.append("\n点击下方按钮查看统计或打开主页。仅列出统计启用后接触过的用户，按最近使用排序。")
     else:
         lines.append("\n暂无用户记录。用户使用机器人后会自动出现在这里，届时可点击刷新。")
     navigation = []
@@ -129,8 +139,13 @@ def format_users(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
     return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
 
-def back_to_users(page: int = 0) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("返回用户列表", callback_data=f"usage:page:{page}")]])
+def user_actions(user_id: int, page: int = 0) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [profile_button(user_id)],
+            [InlineKeyboardButton("返回用户列表", callback_data=f"usage:page:{page}")],
+        ]
+    )
 
 
 async def user_detail(user_id: int) -> str:
@@ -185,7 +200,7 @@ async def admin_statistics(_: Client, msg: Message) -> None:
             text, reply_markup = format_users(await asyncio.to_thread(store.users_page))
         else:
             text = await user_detail(int(command[1]))
-            reply_markup = back_to_users()
+            reply_markup = user_actions(int(command[1]))
     except Exception as e:
         logger.warning(f"管理员统计查询失败 ({type(e).__name__})")
         text = "统计暂时无法查询，请稍后重试。"
@@ -209,7 +224,7 @@ async def admin_user_navigation(_: Client, query: CallbackQuery) -> None:
             text, reply_markup = format_users(await asyncio.to_thread(store.users_page, int(match[1])))
         else:
             text = await user_detail(int(match[2]))
-            reply_markup = back_to_users(int(match[3]))
+            reply_markup = user_actions(int(match[2]), int(match[3]))
         await msg.edit_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
     except MessageNotModified:
         pass  # Refreshing unchanged data is a successful no-op.

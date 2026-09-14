@@ -297,6 +297,9 @@ def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch
         await usage_stats.admin_statistics(None, msg)
         text = msg.reply_text.call_args.args[0]
         assert "2026-01-01" in text and "尚无新统计记录" in text
+        detail_keyboard = msg.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
+        assert detail_keyboard[0][0].url == "tg://user?id=123"
+        assert detail_keyboard[-1][0].callback_data == "usage:page:0"
 
         await usage_stats.observe_contact(None, msg)
         item = stats.start_request(123, 123, "raw", "example.com")
@@ -318,7 +321,9 @@ def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch
         await usage_stats.admin_user_navigation(None, callback)
         text = bot_message.edit_text.call_args.args[0]
         assert "用户统计" in text and "累计解析请求：1" in text and "2026-01-01" in text
-        back = bot_message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        detail_keyboard = bot_message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard
+        assert detail_keyboard[0][0].url == "tg://user?id=123"
+        back = detail_keyboard[-1][0]
         callback.data = back.callback_data
         await usage_stats.admin_user_navigation(None, callback)
         assert "最近用户" in bot_message.edit_text.call_args.args[0]
