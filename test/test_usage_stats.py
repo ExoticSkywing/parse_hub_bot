@@ -201,14 +201,18 @@ def test_no_bot_or_anonymous_user_count(stats: UsageStore) -> None:
     "uid,chat_id,chat_type",
     [(999, 999, enums.ChatType.PRIVATE), (123, -100, enums.ChatType.GROUP), (123, 999, enums.ChatType.PRIVATE)],
 )
+@pytest.mark.parametrize("command", [["stats"], ["user"], ["user", "123"]])
 def test_admin_commands_deny_other_users_and_groups(
-    stats: UsageStore, monkeypatch: pytest.MonkeyPatch, uid: int, chat_id: int, chat_type: enums.ChatType
+    stats: UsageStore, monkeypatch: pytest.MonkeyPatch, uid: int, chat_id: int,
+    chat_type: enums.ChatType, command: list[str],
 ) -> None:
     query = Mock()
     monkeypatch.setattr(stats, "summary", query)
+    monkeypatch.setattr(stats, "users_page", query)
+    monkeypatch.setattr(stats, "user_report", query)
     msg = SimpleNamespace(
         from_user=actor(uid), chat=SimpleNamespace(id=chat_id, type=chat_type),
-        command=["stats"], reply_text=AsyncMock(),
+        command=command, reply_text=AsyncMock(),
     )
     asyncio.run(usage_stats.admin_statistics(None, msg))
     query.assert_not_called()
@@ -248,7 +252,7 @@ def test_timezone_and_safe_user_output(stats: UsageStore, monkeypatch: pytest.Mo
     assert "暂无已完成请求" == usage_stats.success_rate(0, 0)
 
 
-def test_user_menu_command_shows_usage_without_querying(stats: UsageStore, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_user_menu_command_shows_empty_list(stats: UsageStore, monkeypatch: pytest.MonkeyPatch) -> None:
     query = Mock()
     monkeypatch.setattr(stats, "user_report", query)
     msg = SimpleNamespace(
@@ -258,7 +262,10 @@ def test_user_menu_command_shows_usage_without_querying(stats: UsageStore, monke
     asyncio.run(usage_stats.admin_statistics(None, msg))
     query.assert_not_called()
     text = msg.reply_text.call_args.args[0]
-    assert "用法" in text and "<code>/user 123</code>" in text
+    assert "暂无用户记录" in text and "共 0 人" in text
+    keyboard = msg.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
+    assert keyboard[0][0].callback_data == "usage:page:0"
+    assert stats.summary(0, 0)["users"] == 0
 
 
 def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,6 +305,24 @@ def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch
         text = msg.reply_text.call_args.args[0]
         assert "累计解析请求：1" in text and "成功：1" in text and "100.0%" in text
         assert len(text) < 4096
+
+        msg.command = ["user"]
+        await usage_stats.admin_statistics(None, msg)
+        text = msg.reply_text.call_args.args[0]
+        assert "共 1 人" in text and "<code>123</code> · 解析 1 次" in text
+        button = msg.reply_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        bot_message = SimpleNamespace(
+            from_user=actor(999, bot=True), chat=msg.chat, edit_text=AsyncMock(), reply_text=AsyncMock(),
+        )
+        callback = SimpleNamespace(from_user=actor(), message=bot_message, data=button.callback_data, answer=AsyncMock())
+        await usage_stats.admin_user_navigation(None, callback)
+        text = bot_message.edit_text.call_args.args[0]
+        assert "用户统计" in text and "累计解析请求：1" in text and "2026-01-01" in text
+        back = bot_message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        callback.data = back.callback_data
+        await usage_stats.admin_user_navigation(None, callback)
+        assert "最近用户" in bot_message.edit_text.call_args.args[0]
+        assert stats.summary(0, 0)["users"] == 1  # Admin browsing is not a new contact.
         await engine.dispose()
 
     asyncio.run(scenario())

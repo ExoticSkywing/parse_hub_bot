@@ -19,7 +19,7 @@ async def set_admin_menu(client: Client) -> None:
             commands.extend(
                 [
                     BotCommand("stats", "查看使用统计（管理员）"),
-                    BotCommand("user", "查询用户记录（需填写数字 ID）"),
+                    BotCommand("user", "浏览最近用户与使用记录（管理员）"),
                 ]
             )
             scope = BotCommandScopeChat(chat_id=user_id)

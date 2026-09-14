@@ -30,6 +30,7 @@ def test_menu_only_targets_admin_private_chats(monkeypatch: pytest.MonkeyPatch) 
         assert call.kwargs.get("language_code", "") == ""
         commands = call.args[0]
         assert [c.command for c in commands] == [*COMMANDS, "stats", "user"]
+        assert commands[-1].description == "浏览最近用户与使用记录（管理员）"
         assert [c.description for c in commands[:-2]] == [v[usage_menu.bs.language] for v in COMMANDS.values()]
     assert "stats" not in COMMANDS and "user" not in COMMANDS
     for call, user_id in zip(cli.set_chat_menu_button.await_args_list, [123, 456], strict=True):

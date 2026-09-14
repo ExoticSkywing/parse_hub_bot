@@ -159,3 +159,19 @@ class UsageStore:
                 )
             ]
             return result
+
+    def users_page(self, page: int = 0) -> dict[str, Any]:
+        """Recent contacts, ten per page; clamp stale or out-of-range pages."""
+        with self._db() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM visitors").fetchone()[0]
+            pages = max(1, (total + 9) // 10)
+            page = min(max(0, page), pages - 1)
+            users = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT user_id, last_seen, requests FROM visitors "
+                    "ORDER BY last_seen DESC, user_id DESC LIMIT 10 OFFSET ?",
+                    (page * 10,),
+                )
+            ]
+            return {"users": users, "total": total, "page": page, "pages": pages}
