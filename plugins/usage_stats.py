@@ -72,8 +72,12 @@ def format_stats(data: dict[str, Any], legacy_users: int) -> str:
     )
 
 
+def profile_link(user_id: int) -> str:
+    return f'<a href="tg://user?id={user_id}">{user_id}</a>'
+
+
 def format_user(user_id: int, data: dict[str, Any] | None, registered: datetime | None) -> str:
-    lines = [f"<b>用户统计 · <code>{user_id}</code></b>", f"统计时区：{escape(str(stats_timezone()))}"]
+    lines = [f"<b>用户统计 · {profile_link(user_id)}</b>", f"统计时区：{escape(str(stats_timezone()))}"]
     if registered:
         registered = registered.replace(tzinfo=UTC) if registered.tzinfo is None else registered
         lines.append(f"原用户表登记：{format_time(registered.timestamp())}（非使用时间）")
@@ -100,11 +104,6 @@ def format_user(user_id: int, data: dict[str, Any] | None, registered: datetime 
     return "\n".join(lines)
 
 
-def profile_button(user_id: int) -> InlineKeyboardButton:
-    # Use a supported deep link; do not resolve peers while rendering statistics.
-    return InlineKeyboardButton("打开主页", url=f"tg://user?id={user_id}")
-
-
 def format_users(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
     page = data["page"]
     lines = [
@@ -116,7 +115,7 @@ def format_users(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
     for position, user in enumerate(data["users"], start=page * 10 + 1):
         user_id = user["user_id"]
         lines.append(
-            f'\n{position}. <a href="tg://user?id={user_id}">{user_id}</a> · 解析 {user["requests"]} 次\n'
+            f"\n{position}. {profile_link(user_id)} · 解析 {user['requests']} 次\n"
             f"最近使用：{format_time(user['last_seen'])}"
         )
         buttons.append([InlineKeyboardButton(f"查看 {user_id}", callback_data=f"usage:user:{user_id}:{page}")])
@@ -134,13 +133,8 @@ def format_users(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
     return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
 
-def user_actions(user_id: int, page: int = 0) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [profile_button(user_id)],
-            [InlineKeyboardButton("返回用户列表", callback_data=f"usage:page:{page}")],
-        ]
-    )
+def back_to_users(page: int = 0) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("返回用户列表", callback_data=f"usage:page:{page}")]])
 
 
 async def user_detail(user_id: int) -> str:
@@ -195,7 +189,7 @@ async def admin_statistics(_: Client, msg: Message) -> None:
             text, reply_markup = format_users(await asyncio.to_thread(store.users_page))
         else:
             text = await user_detail(int(command[1]))
-            reply_markup = user_actions(int(command[1]))
+            reply_markup = back_to_users()
     except Exception as e:
         logger.warning(f"管理员统计查询失败 ({type(e).__name__})")
         text = "统计暂时无法查询，请稍后重试。"
@@ -219,7 +213,7 @@ async def admin_user_navigation(_: Client, query: CallbackQuery) -> None:
             text, reply_markup = format_users(await asyncio.to_thread(store.users_page, int(match[1])))
         else:
             text = await user_detail(int(match[2]))
-            reply_markup = user_actions(int(match[2]), int(match[3]))
+            reply_markup = back_to_users(int(match[3]))
         await msg.edit_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
     except MessageNotModified:
         pass  # Refreshing unchanged data is a successful no-op.

@@ -298,7 +298,9 @@ def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch
         text = msg.reply_text.call_args.args[0]
         assert "2026-01-01" in text and "尚无新统计记录" in text
         detail_keyboard = msg.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
-        assert detail_keyboard[0][0].url == "tg://user?id=123"
+        assert '<a href="tg://user?id=123">123</a>' in text
+        assert len(detail_keyboard) == 1 and len(detail_keyboard[0]) == 1
+        assert detail_keyboard[0][0].text == "返回用户列表" and detail_keyboard[0][0].url is None
         assert detail_keyboard[-1][0].callback_data == "usage:page:0"
 
         await usage_stats.observe_contact(None, msg)
@@ -322,7 +324,9 @@ def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch
         text = bot_message.edit_text.call_args.args[0]
         assert "用户统计" in text and "累计解析请求：1" in text and "2026-01-01" in text
         detail_keyboard = bot_message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard
-        assert detail_keyboard[0][0].url == "tg://user?id=123"
+        assert '<a href="tg://user?id=123">123</a>' in text
+        assert len(detail_keyboard) == 1 and len(detail_keyboard[0]) == 1
+        assert detail_keyboard[0][0].text == "返回用户列表" and detail_keyboard[0][0].url is None
         back = detail_keyboard[-1][0]
         callback.data = back.callback_data
         await usage_stats.admin_user_navigation(None, callback)

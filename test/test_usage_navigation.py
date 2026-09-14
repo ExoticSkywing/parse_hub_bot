@@ -80,7 +80,8 @@ def test_list_detail_and_return_keep_page(stats: UsageStore, monkeypatch: pytest
     asyncio.run(usage_stats.admin_user_navigation(None, query))
     detail.assert_awaited_once_with(expected_id)
     detail_keyboard = query.message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard
-    assert detail_keyboard[0][0].url == f"tg://user?id={expected_id}"
+    assert len(detail_keyboard) == 1 and len(detail_keyboard[0]) == 1
+    assert detail_keyboard[0][0].text == "返回用户列表" and detail_keyboard[0][0].url is None
     back = detail_keyboard[-1][0]
     assert back.callback_data == "usage:page:1"
     query.data = back.callback_data
@@ -162,41 +163,33 @@ def test_telegram_limits_and_paging_buttons(stats: UsageStore) -> None:
         assert len(text.encode("utf-16-le")) // 2 < 4096
         for row in markup.inline_keyboard:
             for button in row:
-                if button.url is not None:
-                    assert button.url.startswith("tg://user?id=")
-                    assert button.callback_data is None
-                else:
-                    assert isinstance(button.callback_data, str)
-                    assert len(button.callback_data.encode()) <= 64
+                assert button.url is None
+                assert isinstance(button.callback_data, str)
+                assert len(button.callback_data.encode()) <= 64
         navigation = [button.text for button in markup.inline_keyboard[-1]]
         assert navigation == (["刷新", "下一页"] if page == 0 else ["上一页", "刷新"])
 
 
 @pytest.mark.parametrize("user_id", [123, 5_000_000_001, 2**63 - 1])
-def test_profile_link_serializes_without_peer_lookup(user_id: int) -> None:
-    cli: Any = SimpleNamespace(resolve_peer=AsyncMock(side_effect=RuntimeError("unknown peer")), invoke=AsyncMock())
-    button = usage_stats.profile_button(user_id)
-
-    async def serialize() -> Any:
-        return await button.write(cli)
-
-    value = asyncio.run(serialize())
-    assert isinstance(value, raw.types.KeyboardButtonUrl)
-    assert value.url == f"tg://user?id={user_id}"
-    assert value.text == "打开主页"
-    cli.resolve_peer.assert_not_awaited()
-    cli.invoke.assert_not_awaited()
-
-
-@pytest.mark.parametrize("user_id", [123, 5_000_000_001, 2**63 - 1])
-def test_list_id_parses_as_profile_mention_not_copyable_code(user_id: int) -> None:
+@pytest.mark.parametrize("view", ["list", "detail", "empty_detail"])
+def test_id_parses_as_profile_mention_without_profile_buttons(user_id: int, view: str) -> None:
     cli: Any = SimpleNamespace(
         resolve_peer=AsyncMock(return_value=raw.types.InputUser(user_id=user_id, access_hash=1)),
     )
-    text, markup = usage_stats.format_users({
-        "page": 0, "pages": 1, "total": 1,
-        "users": [{"user_id": user_id, "requests": 3, "last_seen": 0}],
-    })
+    if view == "list":
+        text, markup = usage_stats.format_users({
+            "page": 0, "pages": 1, "total": 1,
+            "users": [{"user_id": user_id, "requests": 3, "last_seen": 0}],
+        })
+    else:
+        report = {
+            "first_seen": 0, "last_seen": 0, "requests": 3,
+            "successes": 2, "failures": 1, "interrupted": 0, "recent": [],
+        }
+        text = usage_stats.format_user(user_id, report if view == "detail" else None, None)
+        markup = usage_stats.back_to_users(2)
+        assert len(markup.inline_keyboard) == 1 and len(markup.inline_keyboard[0]) == 1
+        assert markup.inline_keyboard[0][0].callback_data == "usage:page:2"
 
     async def parse() -> Any:
         return await HTML(cli).parse(text)
@@ -209,3 +202,4 @@ def test_list_id_parses_as_profile_mention_not_copyable_code(user_id: int) -> No
     assert parsed["message"][mentions[0].offset:mentions[0].offset + mentions[0].length] == str(user_id)
     assert not any(isinstance(e, raw.types.MessageEntityCode) for e in parsed["entities"])
     assert all(button.url is None for row in markup.inline_keyboard for button in row)
+    assert all(button.text != "打开主页" for row in markup.inline_keyboard for button in row)
