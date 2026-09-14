@@ -116,17 +116,12 @@ def format_users(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
     for position, user in enumerate(data["users"], start=page * 10 + 1):
         user_id = user["user_id"]
         lines.append(
-            f"\n{position}. <code>{user_id}</code> · 解析 {user['requests']} 次\n"
+            f'\n{position}. <a href="tg://user?id={user_id}">{user_id}</a> · 解析 {user["requests"]} 次\n'
             f"最近使用：{format_time(user['last_seen'])}"
         )
-        buttons.append(
-            [
-                InlineKeyboardButton(f"查看 {user_id}", callback_data=f"usage:user:{user_id}:{page}"),
-                profile_button(user_id),
-            ]
-        )
+        buttons.append([InlineKeyboardButton(f"查看 {user_id}", callback_data=f"usage:user:{user_id}:{page}")])
     if data["users"]:
-        lines.append("\n点击下方按钮查看统计或打开主页。仅列出统计启用后接触过的用户，按最近使用排序。")
+        lines.append("\n点击用户 ID 打开主页，下方按钮查看统计。仅列出统计启用后接触过的用户，按最近使用排序。")
     else:
         lines.append("\n暂无用户记录。用户使用机器人后会自动出现在这里，届时可点击刷新。")
     navigation = []

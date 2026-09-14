@@ -312,7 +312,7 @@ def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch
         msg.command = ["user"]
         await usage_stats.admin_statistics(None, msg)
         text = msg.reply_text.call_args.args[0]
-        assert "共 1 人" in text and "<code>123</code> · 解析 1 次" in text
+        assert "共 1 人" in text and '<a href="tg://user?id=123">123</a> · 解析 1 次' in text
         button = msg.reply_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
         bot_message = SimpleNamespace(
             from_user=actor(999, bot=True), chat=msg.chat, edit_text=AsyncMock(), reply_text=AsyncMock(),

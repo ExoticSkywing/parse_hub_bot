@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pyrogram import enums, raw
 from pyrogram.errors import MessageNotModified
+from pyrogram.parser.html import HTML
 
 from extensions import usage_store
 from extensions.usage_store import UsageStore
@@ -70,7 +71,8 @@ def test_list_detail_and_return_keep_page(stats: UsageStore, monkeypatch: pytest
     assert [button.callback_data for button in keyboard[-1]] == ["usage:page:0", "usage:page:1", "usage:page:2"]
     for row in keyboard[:-1]:
         user_id = int(row[0].callback_data.split(":")[2])
-        assert row[1].text == "打开主页" and row[1].url == f"tg://user?id={user_id}"
+        assert len(row) == 1 and row[0].url is None
+        assert f'<a href="tg://user?id={user_id}">{user_id}</a>' in call.args[0]
     query.data = keyboard[0][0].callback_data
     expected_id = int(query.data.split(":")[2])
     detail = AsyncMock(return_value="user detail")
@@ -184,3 +186,26 @@ def test_profile_link_serializes_without_peer_lookup(user_id: int) -> None:
     assert value.text == "打开主页"
     cli.resolve_peer.assert_not_awaited()
     cli.invoke.assert_not_awaited()
+
+
+@pytest.mark.parametrize("user_id", [123, 5_000_000_001, 2**63 - 1])
+def test_list_id_parses_as_profile_mention_not_copyable_code(user_id: int) -> None:
+    cli: Any = SimpleNamespace(
+        resolve_peer=AsyncMock(return_value=raw.types.InputUser(user_id=user_id, access_hash=1)),
+    )
+    text, markup = usage_stats.format_users({
+        "page": 0, "pages": 1, "total": 1,
+        "users": [{"user_id": user_id, "requests": 3, "last_seen": 0}],
+    })
+
+    async def parse() -> Any:
+        return await HTML(cli).parse(text)
+
+    parsed = asyncio.run(parse())
+    mentions = [e for e in parsed["entities"] if isinstance(e, raw.types.InputMessageEntityMentionName)]
+    assert len(mentions) == 1
+    target = mentions[0].user_id
+    assert isinstance(target, raw.types.InputUser) and target.user_id == user_id
+    assert parsed["message"][mentions[0].offset:mentions[0].offset + mentions[0].length] == str(user_id)
+    assert not any(isinstance(e, raw.types.MessageEntityCode) for e in parsed["entities"])
+    assert all(button.url is None for row in markup.inline_keyboard for button in row)
