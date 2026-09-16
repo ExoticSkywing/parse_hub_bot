@@ -6,6 +6,8 @@ from parsehub.types import (
 )
 
 from core import pl_cfg
+from extensions.instagram_cookie import enable_instagram_cookie_priority
+from extensions.tiktok_web import enable_tiktok_web_priority
 from log import logger
 
 logger = logger.bind(name="ParseService")
@@ -21,6 +23,8 @@ class ParseService:
 
     def __init__(self) -> None:
         self.parser = ParseHub()
+        enable_instagram_cookie_priority(self.parser)
+        enable_tiktok_web_priority(self.parser)
 
     def get_platform(self, url: str) -> Platform:
         p = self.parser.get_platform(url)
