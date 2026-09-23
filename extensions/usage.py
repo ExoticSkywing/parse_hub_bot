@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import unicodedata
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from functools import wraps
@@ -49,9 +50,18 @@ async def safe_store[T](fn: Callable[..., T], *args: Any) -> T | None:
         return None
 
 
+def user_display_name(user: "User") -> str | None:
+    """Remember the last observed name, without requesting a Telegram profile."""
+    parts = (getattr(user, "first_name", None), getattr(user, "last_name", None))
+    name = " ".join(" ".join(part for part in parts if isinstance(part, str)).split())
+    # Keep emoji joiners, but discard control/bidi characters that could disguise a row.
+    name = "".join(c for c in name if unicodedata.category(c) not in {"Cc", "Cf"} or c == "\u200d")
+    return name.strip()[:256] or None
+
+
 async def touch_user(user: "User | None") -> None:
     if user and not user.is_bot:
-        await safe_store(store.touch, user.id)
+        await safe_store(store.touch, user.id, user_display_name(user))
 
 
 async def _record(
@@ -71,7 +81,7 @@ async def _record(
             platform = (urlsplit(url).hostname or "未知平台")[:100]
         except ValueError:
             platform = "未知平台"
-        request_id = await safe_store(store.start_request, user.id, chat_id, kind, platform)
+        request_id = await safe_store(store.start_request, user.id, chat_id, kind, platform, user_display_name(user))
         result = await action()
         status = "success" if result else "failure"
         return result

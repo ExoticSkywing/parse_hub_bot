@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -314,8 +315,10 @@ def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch
         msg.command = ["user"]
         await usage_stats.admin_statistics(None, msg)
         text = msg.reply_text.call_args.args[0]
-        assert "共 1 人" in text and '<a href="tg://user?id=123">123</a> · 解析 1 次' in text
+        assert "共 1 人" in text and '<a href="tg://user?id=123">用户123</a>' in text
+        assert "解析 1 次" in text
         button = msg.reply_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        assert button.text == "查看①"
         bot_message = SimpleNamespace(
             from_user=actor(999, bot=True), chat=msg.chat, edit_text=AsyncMock(), reply_text=AsyncMock(),
         )
@@ -335,6 +338,80 @@ def test_authorized_commands_with_legacy_database(stats: UsageStore, monkeypatch
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+def test_existing_database_adds_profile_table_without_changing_counts(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    now = datetime.now(UTC).timestamp()
+    with sqlite3.connect(path) as conn:
+        conn.executescript("""
+            CREATE TABLE metadata (id INTEGER PRIMARY KEY, started_at REAL NOT NULL);
+            CREATE TABLE visitors (
+                user_id INTEGER PRIMARY KEY, first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+                requests INTEGER NOT NULL DEFAULT 0, successes INTEGER NOT NULL DEFAULT 0,
+                failures INTEGER NOT NULL DEFAULT 0, interrupted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES visitors(user_id),
+                chat_id INTEGER, kind TEXT NOT NULL, platform TEXT NOT NULL,
+                started_at REAL NOT NULL, finished_at REAL, status TEXT NOT NULL
+            );
+        """)
+        conn.execute("INSERT INTO metadata VALUES (1, ?)", (now - 3600,))
+        conn.execute("INSERT INTO visitors VALUES (123, ?, ?, 7, 5, 2, 0)", (now - 60, now))
+        conn.execute("INSERT INTO requests VALUES (1, 123, 123, 'raw', 'example.com', ?, ?, 'success')", (now, now))
+    restored = UsageStore(path)
+    before = restored.user_report(123)
+    assert before is not None and before["display_name"] is None and len(before["recent"]) == 1
+    restored.touch(123, "小鹿")
+    report = UsageStore(path).user_report(123)  # Creating the table is idempotent across restarts.
+    assert report is not None and report["display_name"] == "小鹿"
+    for key in ["first_seen", "requests", "successes", "failures", "interrupted", "recent"]:
+        assert report[key] == before[key]
+    assert restored.summary(0, 0)["started_at"] == now - 3600
+    with sqlite3.connect(path) as conn:
+        assert "display_name" not in [row[1] for row in conn.execute("PRAGMA table_info(visitors)")]
+
+
+@pytest.mark.parametrize("entry", ["contact", "parse", "inline_choice", "inline_suggestion"])
+def test_names_are_captured_from_existing_events(stats: UsageStore, entry: str) -> None:
+    user = SimpleNamespace(id=123, is_bot=False, first_name="小鹿", last_name="同学")
+
+    async def scenario() -> None:
+        if entry == "contact":
+            await usage.touch_user(user)
+        elif entry == "inline_suggestion":
+            await usage_stats.observe_inline(None, SimpleNamespace(from_user=user))
+        elif entry == "parse":
+            req = request()
+            req.msg.from_user = user
+            await usage.track_parse(AsyncMock(return_value=True))(req)
+        else:
+            chosen = SimpleNamespace(query="https://www.youtube.com/watch?v=test", from_user=user)
+            await usage.track_inline_choice(AsyncMock(return_value=True))(None, chosen)
+
+    asyncio.run(scenario())
+    report = stats.user_report(123)
+    assert report is not None and report["display_name"] == "小鹿 同学"
+    assert report["requests"] == int(entry in {"parse", "inline_choice"})
+    assert stats.users_page()["users"][0]["display_name"] == "小鹿 同学"
+
+
+def test_name_updates_do_not_add_requests_or_erase_known_names(stats: UsageStore) -> None:
+    stats.touch(123, "旧昵称")
+    item = stats.start_request(123, 123, "raw", "example.com", "新昵称")
+    stats.finish_request(item, "success")
+    stats.touch(123)  # An incomplete Telegram user object must not erase the known name.
+    report = stats.user_report(123)
+    assert report is not None and report["display_name"] == "新昵称"
+    assert (report["requests"], report["successes"]) == (1, 1)
+
+
+def test_display_name_normalizes_controls_without_breaking_emoji() -> None:
+    user = SimpleNamespace(first_name="  小鹿\n\t\u202e<朋友>\x00  ", last_name="👩\u200d💻")
+    assert usage.user_display_name(user) == "小鹿 <朋友> 👩\u200d💻"
+    assert usage.user_display_name(SimpleNamespace(first_name=None)) is None
+    assert len(usage.user_display_name(SimpleNamespace(first_name="鹿" * 300))) == 256
 
 
 @pytest.mark.parametrize("mode", ["raw", "zip"])

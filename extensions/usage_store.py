@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS visitors (
     failures INTEGER NOT NULL DEFAULT 0,
     interrupted INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS visitor_profiles (
+    user_id INTEGER PRIMARY KEY REFERENCES visitors(user_id),
+    display_name TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES visitors(user_id),
@@ -88,22 +92,40 @@ class UsageStore:
                 conn.close()
 
     @staticmethod
-    def _touch(conn: sqlite3.Connection, user_id: int, now: float) -> None:
+    def _touch(conn: sqlite3.Connection, user_id: int, now: float, display_name: str | None = None) -> None:
         conn.execute(
             "INSERT INTO visitors(user_id, first_seen, last_seen) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET "
             "first_seen = MIN(first_seen, excluded.first_seen), last_seen = MAX(last_seen, excluded.last_seen)",
             (user_id, now, now),
         )
+        if display_name:
+            conn.execute(
+                "INSERT INTO visitor_profiles(user_id, display_name) VALUES (?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name",
+                (user_id, display_name),
+            )
 
-    def touch(self, user_id: int) -> None:
+    def touch(self, user_id: int, display_name: str | None = None) -> None:
         with self._db() as conn:
-            self._touch(conn, user_id, time.time())
+            self._touch(conn, user_id, time.time(), display_name)
 
-    def start_request(self, user_id: int, chat_id: int | None, kind: str, platform: str) -> int:
+    def cache_names(self, names: dict[int, str]) -> None:
+        """Fill existing contacts' missing names without manufacturing user activity."""
+        with self._db() as conn:
+            conn.executemany(
+                "INSERT INTO visitor_profiles(user_id, display_name) "
+                "SELECT user_id, ? FROM visitors WHERE user_id = ? "
+                "ON CONFLICT(user_id) DO NOTHING",
+                [(name, user_id) for user_id, name in names.items() if name],
+            )
+
+    def start_request(
+        self, user_id: int, chat_id: int | None, kind: str, platform: str, display_name: str | None = None,
+    ) -> int:
         with self._db() as conn:
             now = time.time()
-            self._touch(conn, user_id, now)
+            self._touch(conn, user_id, now, display_name)
             cursor = conn.execute(
                 "INSERT INTO requests(user_id, chat_id, kind, platform, started_at, status) "
                 "VALUES (?, ?, ?, ?, ?, 'running')",
@@ -146,7 +168,10 @@ class UsageStore:
 
     def user_report(self, user_id: int) -> dict[str, Any] | None:
         with self._db() as conn:
-            row = conn.execute("SELECT * FROM visitors WHERE user_id = ?", (user_id,)).fetchone()
+            row = conn.execute(
+                "SELECT visitors.*, visitor_profiles.display_name FROM visitors "
+                "LEFT JOIN visitor_profiles USING (user_id) WHERE user_id = ?", (user_id,),
+            ).fetchone()
             if row is None:
                 return None
             result = dict(row)
@@ -169,7 +194,8 @@ class UsageStore:
             users = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT user_id, last_seen, requests FROM visitors "
+                    "SELECT user_id, last_seen, requests, display_name FROM visitors "
+                    "LEFT JOIN visitor_profiles USING (user_id) "
                     "ORDER BY last_seen DESC, user_id DESC LIMIT 10 OFFSET ?",
                     (page * 10,),
                 )
