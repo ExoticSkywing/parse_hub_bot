@@ -41,6 +41,9 @@ class ParseService:
             try:
                 cookie = pl_cfg.roll_cookie(p.id)
                 proxy = pl_cfg.roll_parser_proxy(p.id)
+                if attempt == max_retries and proxy:
+                    logger.info(f"代理重试多次失败，最终尝试直连兜底: {url}")
+                    proxy = None
                 logger.debug(f"使用配置: proxy={proxy}, cookie={cookie}, attempt={attempt}/{max_retries}")
                 pr = await self.parser.parse(url, cookie=cookie.get_secret_value() if cookie else None, proxy=proxy)
                 logger.debug(f"解析完成: {pr}")
@@ -58,6 +61,9 @@ class ParseService:
         for attempt in range(1, max_retries + 1):
             try:
                 proxy = pl_cfg.roll_parser_proxy(p.id)
+                if attempt == max_retries and proxy:
+                    logger.info(f"代理重试多次失败，最终获取原始链接尝试直连兜底: {url}")
+                    proxy = None
                 logger.debug(f"使用配置: proxy={proxy}, attempt={attempt}/{max_retries}")
                 raw_url = await self.parser.get_raw_url(url, proxy=proxy, clean_all=clean_all)
                 logger.debug(f"原始 URL: {raw_url}")
