@@ -18,6 +18,8 @@ from utils.ph import Telegraph
 
 logger = logger.bind(name="Helpers")
 
+START_PLATFORMS_AFTER_XHS = ("coolapk", "tieba", "douban", "zhihu", "pipix", "zuiyou")
+
 COMMANDS = {
     "start": t_("开始"),
     "jx": t_("解析并预览内容"),
@@ -152,11 +154,23 @@ async def create_richtext_telegraph(cli: Client, parse_result: RichTextParseResu
 
 
 def get_supported_platforms() -> str:
-    text: list[str] = []
-    for i in ParseHub().get_platforms():
-        text.append(f"**{i['name']}** __({'__, __'.join(i['supported_types'])})__")
-    text.sort(reverse=True)
-    return "\n".join(text)
+    platforms = ParseHub().get_platforms()
+    platforms.sort(
+        key=lambda item: f"**{item['name']}** __({'__, __'.join(item['supported_types'])})__",
+        reverse=True,
+    )
+
+    if any(item["id"] == "xhs" for item in platforms):
+        moved = {item["id"]: item for item in platforms if item["id"] in START_PLATFORMS_AFTER_XHS}
+        platforms = [item for item in platforms if item["id"] not in moved]
+        xhs_index = next(index for index, item in enumerate(platforms) if item["id"] == "xhs")
+        platforms[xhs_index + 1 : xhs_index + 1] = [
+            moved[platform_id] for platform_id in START_PLATFORMS_AFTER_XHS if platform_id in moved
+        ]
+
+    return "\n".join(
+        f"**{item['name']}** __({'__, __'.join(item['supported_types'])})__" for item in platforms
+    )
 
 
 def format_label(text: str) -> str:
