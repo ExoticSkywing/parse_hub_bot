@@ -1,10 +1,11 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, Mock, call
 
 import httpx
 import pytest
-from parsehub.types import ParseError, Platform
+from parsehub.types import ContentUnavailableError, ParseError, Platform
+from pydantic import SecretStr
 
 from services import parser as parser_module
 
@@ -22,6 +23,7 @@ def service(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(parser_module, "ParseHub", lambda: parser)
     monkeypatch.setattr(parser_module, "enable_instagram_cookie_priority", lambda instance: None)
     monkeypatch.setattr(parser_module, "enable_tiktok_web_priority", lambda instance: None)
+    monkeypatch.setattr(parser_module, "cookie_health", Mock())
     monkeypatch.setattr(
         parser_module,
         "pl_cfg",
@@ -123,3 +125,44 @@ def test_tiktok_cancel_does_not_retry(service) -> None:
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(parse_service.parse(URL))
     assert parser.parse.await_count == 1
+
+
+@pytest.mark.parametrize("method_name", ["parse", "get_raw_url", "test_cookie"])
+def test_unavailable_content_is_not_retried_or_counted_as_cookie_failure(service, method_name: str) -> None:
+    parse_service, parser = service
+    cookie = "sessionid=synthetic"
+    parser_module.pl_cfg.roll_cookie = lambda platform: SecretStr(cookie)
+    error = ContentUnavailableError("content deleted")
+    method = parser.get_raw_url if method_name == "get_raw_url" else parser.parse
+    method.side_effect = error
+    args = (URL, cookie) if method_name == "test_cookie" else (URL,)
+    with pytest.raises(ContentUnavailableError) as raised:
+        asyncio.run(getattr(parse_service, method_name)(*args))
+    assert raised.value is error
+    assert method.await_count == 1
+    parser_module.cookie_health.record_failure.assert_not_called()
+    parser_module.cookie_health.record_success.assert_not_called()
+
+
+def test_parser_cookie_health_records_failure_then_success(service) -> None:
+    parse_service, parser = service
+    cookie = "sessionid=synthetic"
+    parser_module.pl_cfg.roll_cookie = lambda platform: SecretStr(cookie)
+    error = RuntimeError("temporary error")
+    result = object()
+    parser.parse.side_effect = [error, result]
+    assert asyncio.run(parse_service.parse(URL)) is result
+    parser_module.cookie_health.record_failure.assert_called_once_with("example", cookie, error, URL)
+    parser_module.cookie_health.record_success.assert_called_once_with(cookie)
+
+
+def test_manual_cookie_test_records_single_failure_without_alert(service) -> None:
+    parse_service, parser = service
+    error = RuntimeError("temporary error")
+    parser.parse.side_effect = error
+    with pytest.raises(RuntimeError):
+        asyncio.run(parse_service.test_cookie(URL, "sessionid=synthetic"))
+    assert parser.parse.await_count == 1
+    parser_module.cookie_health.record_failure.assert_called_once_with(
+        "example", "sessionid=synthetic", error, URL, alert=False,
+    )

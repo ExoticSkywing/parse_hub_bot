@@ -248,7 +248,7 @@ async def user_detail(user_id: int, cli: Client | None = None) -> str:
     return format_user(user_id, report, registered)
 
 
-@Client.on_message(filters.command(["start", "help", "lang", "cfg"]), group=-1)
+@Client.on_message(filters.command(["start", "help", "lang", "cfg", "ocfg"]), group=-1)
 async def observe_contact(_: Client, msg: Message) -> None:
     await touch_user(msg.from_user)
 

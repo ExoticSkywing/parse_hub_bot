@@ -4,7 +4,7 @@ import httpx
 from parsehub import ParseHub
 from parsehub.parsers.parser.tiktok import TikTokApiResult, TikTokParser
 from parsehub.provider_api.tiktok import TikTokWebCrawler
-from parsehub.types import ParseError
+from parsehub.types import ContentUnavailableError, ParseError
 
 
 def is_tiktok_rate_limited(error: BaseException) -> bool:
@@ -69,6 +69,8 @@ class WebFirstTikTokParser(TikTokParser, register=False):
         try:
             response = await crawler.fetch_video_from_web(url, expected_aweme_id=item.aweme_id)
             return TikTokApiResult.parse(response)
+        except ContentUnavailableError:
+            raise
         except Exception as web_error:
             if is_tiktok_rate_limited(web_error):
                 raise ParseError(f"TikTok 请求过于频繁，请稍后再试；web={web_error}") from web_error
@@ -77,6 +79,8 @@ class WebFirstTikTokParser(TikTokParser, register=False):
             try:
                 response = await crawler.fetch_one_video(item.aweme_id)
                 return TikTokApiResult.parse(response)
+            except ContentUnavailableError:
+                raise
             except Exception as app_error:
                 raise TikTokParseError(web_error, crawler.http_error or app_error) from app_error
 

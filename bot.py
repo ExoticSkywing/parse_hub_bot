@@ -1,6 +1,7 @@
 import asyncio
 import os
 import shutil
+from functools import partial
 from typing import Any
 
 import pillow_heif
@@ -15,8 +16,9 @@ from db.init import init_db
 from extensions.usage_menu import set_admin_menu
 from i18n import ISO639_MAP
 from log import logger, setup_logging
+from plugins.admin.alert import send_cookie_alert
 from plugins.helpers import COMMANDS
-from services import parse_cache
+from services import cookie_health, parse_cache
 from utils.event_loop import setup_optimized_event_loop
 
 pillow_heif.register_heif_opener()
@@ -90,9 +92,10 @@ class Bot(Client):
         logger.success("数据库初始化完成")
 
         parse_cache.start_cleanup()
+        cookie_health.set_notifier(partial(send_cookie_alert, self))
         await super().start(*args, **kwargs)
         await self.set_menu()
-        await set_admin_menu(self)
+        await self.set_admin_menu()
         return self
 
     async def stop(self, *args: Any, **kwargs: Any) -> Client:
@@ -122,6 +125,10 @@ class Bot(Client):
             )
             logger.debug(f"{iso639 or '默认'} 菜单已设置: {tc}")
             await asyncio.sleep(0.5)
+
+    async def set_admin_menu(self) -> None:
+        """Combine platform and usage commands without widening either permission."""
+        await set_admin_menu(self)
 
 
 if __name__ == "__main__":

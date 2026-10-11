@@ -8,10 +8,11 @@ import pytest
 from parsehub import ParseHub
 from parsehub.parsers.parser.tiktok import TikTokParser, TikTokVideoParseResult
 from parsehub.provider_api.tiktok import TIKTOK_APP_FEED
-from parsehub.types import ImageParseResult, ParseError, Platform
+from parsehub.types import ContentUnavailableError, ImageParseResult, ParseError, Platform
 from parsehub.utils.helpers import SecretCookie
 from pydantic import SecretStr
 
+from extensions import tiktok_web
 from extensions.instagram_cookie import CookieFirstInstagramParser, enable_instagram_cookie_priority
 from extensions.tiktok_web import (
     TikTokParseError,
@@ -239,6 +240,30 @@ def test_cancelled_app_request_is_not_wrapped(mock_http: SimpleNamespace) -> Non
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
     assert stages(mock_http) == ["web", "feed"]
+
+
+@pytest.mark.parametrize("path", ["web", "app"])
+def test_unavailable_content_keeps_error_type_without_fallback_retry(
+    mock_http: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, path: str,
+) -> None:
+    error = ContentUnavailableError("content deleted")
+    app = AsyncMock(side_effect=error)
+    monkeypatch.setattr(tiktok_web._SingleAttemptTikTokCrawler, "fetch_one_video", app)
+    if path == "web":
+        monkeypatch.setattr(
+            tiktok_web._SingleAttemptTikTokCrawler, "fetch_video_from_web", AsyncMock(side_effect=error),
+        )
+    else:
+        mock_http.web_body = "<html></html>"
+    with pytest.raises(ContentUnavailableError) as raised:
+        asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
+    assert raised.value is error
+    if path == "web":
+        app.assert_not_awaited()
+        assert mock_http.requests == []
+    else:
+        app.assert_awaited_once_with(ITEM_ID)
+        assert stages(mock_http) == ["web"]
 
 
 def test_unrecognized_link_is_delegated_to_upstream(monkeypatch: pytest.MonkeyPatch) -> None:

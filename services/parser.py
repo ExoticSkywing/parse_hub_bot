@@ -3,12 +3,15 @@ from typing import Self
 from parsehub import ParseHub, Platform
 from parsehub.types import (
     AnyParseResult,
+    ContentUnavailableError,
 )
 
 from core import pl_cfg
 from extensions.instagram_cookie import enable_instagram_cookie_priority
 from extensions.tiktok_web import enable_tiktok_web_priority, is_tiktok_rate_limited
 from log import logger
+
+from .cookie_health import cookie_health
 
 logger = logger.bind(name="ParseService")
 
@@ -40,24 +43,43 @@ class ParseService:
         max_retries = 2 if is_tiktok else 3
         for attempt in range(1, max_retries + 1):
             proxy = None
+            cookie = pl_cfg.roll_cookie(p.id)
+            cookie_value = cookie.get_secret_value() if cookie else None
             try:
-                cookie = pl_cfg.roll_cookie(p.id)
                 proxy = pl_cfg.roll_parser_proxy(p.id)
                 if attempt == max_retries and proxy:
                     logger.info(f"代理解析失败，尝试直连兜底: {url}")
                     proxy = None
                 logger.debug(f"使用配置: proxy={proxy}, cookie={cookie}, attempt={attempt}/{max_retries}")
-                pr = await self.parser.parse(url, cookie=cookie.get_secret_value() if cookie else None, proxy=proxy)
+                pr = await self.parser.parse(url, cookie=cookie_value, proxy=proxy)
                 logger.debug(f"解析完成: {pr}")
+                if cookie_value:
+                    cookie_health.record_success(cookie_value)
                 return pr
             except Exception as e:
                 logger.warning(f"解析失败, attempt={attempt}/{max_retries}, err={e}")
+                if isinstance(e, ContentUnavailableError):
+                    raise
+                if cookie_value:
+                    cookie_health.record_failure(p.id, cookie_value, e, url)
                 # Do not repeat the same direct path or keep requesting after HTTP 429.
                 if is_tiktok and (not proxy or attempt >= max_retries or is_tiktok_rate_limited(e)):
                     raise
                 if attempt >= max_retries:
                     raise Exception(e) from e
         raise
+
+    async def test_cookie(self, url: str, cookie: str) -> None:
+        """用指定 cookie 解析一次, 结果计入该 cookie 的统计"""
+        p = self.get_platform(url)
+        try:
+            await self.parser.parse(url, cookie=cookie, proxy=pl_cfg.roll_parser_proxy(p.id))
+        except ContentUnavailableError:
+            raise
+        except Exception as e:
+            cookie_health.record_failure(p.id, cookie, e, url, alert=False)
+            raise
+        cookie_health.record_success(cookie)
 
     async def get_raw_url(self, url: str, clean_all: bool = True) -> str:
         p = self.get_platform(url)
@@ -77,6 +99,8 @@ class ParseService:
                 return str(raw_url)
             except Exception as e:
                 logger.warning(f"获取原始 URL 失败, attempt={attempt}/{max_retries}, err={e}")
+                if isinstance(e, ContentUnavailableError):
+                    raise
                 if is_tiktok and (not proxy or attempt >= max_retries or is_tiktok_rate_limited(e)):
                     raise
                 if attempt >= max_retries:

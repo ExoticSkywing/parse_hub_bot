@@ -6,22 +6,27 @@ from pyrogram.types import BotCommand, BotCommandScopeChat, MenuButtonCommands
 from core import bs
 from extensions.usage import admin_ids
 from log import logger
-from plugins.helpers import COMMANDS
+from plugins.helpers import ADMIN_COMMANDS, COMMANDS
 
 
 async def set_admin_menu(client: Client) -> None:
-    for user_id in sorted(admin_ids()):
+    usage_admins = admin_ids()
+    platform_admins = frozenset(bs.admin_ids)
+    for user_id in sorted(usage_admins | platform_admins):
         try:
             # A chat-scoped list replaces the public list, so retain its commands.
             # The empty language code covers all languages in this private chat
             # and takes precedence over language-specific public menus.
             commands = [BotCommand(name, labels[bs.language]) for name, labels in COMMANDS.items()]
-            commands.extend(
-                [
-                    BotCommand("stats", "查看使用统计（管理员）"),
-                    BotCommand("user", "浏览最近用户与使用记录（管理员）"),
-                ]
-            )
+            if user_id in platform_admins:
+                commands.extend(BotCommand(name, labels[bs.language]) for name, labels in ADMIN_COMMANDS.items())
+            if user_id in usage_admins:
+                commands.extend(
+                    [
+                        BotCommand("stats", "查看使用统计（管理员）"),
+                        BotCommand("user", "浏览最近用户与使用记录（管理员）"),
+                    ]
+                )
             scope = BotCommandScopeChat(chat_id=user_id)
             current = await client.get_bot_commands(scope=scope)
             if [(c.command, c.description) for c in current] != [(c.command, c.description) for c in commands]:

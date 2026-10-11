@@ -1,3 +1,8 @@
+from pathlib import Path
+
+import pytest
+from yaml import safe_load
+
 from plugins import helpers
 
 
@@ -31,6 +36,8 @@ def test_selected_chinese_platforms_follow_xhs(monkeypatch) -> None:
         "Future",
     ]
     assert len(lines) == len(platforms)
+    rows = helpers._platform_table("zh-hans").cells[1:]
+    assert [row[0].text for row in rows] == [line.split("**", 2)[1] for line in lines]
 
 
 def test_order_falls_back_to_existing_sort_without_xhs(monkeypatch) -> None:
@@ -44,3 +51,33 @@ def test_order_falls_back_to_existing_sort_without_xhs(monkeypatch) -> None:
         "**酷安** __(图文)__",
         "**Youtube** __(视频)__",
     ]
+
+
+@pytest.mark.parametrize("language", ["zh-hans", "zh-hant", "en-us", "ja-jp"])
+def test_rich_help_retains_instance_attribution(language: str) -> None:
+    message = helpers.build_help_rich_message(language)
+    text = repr(message)
+    assert "Source: " in text and "@nebuluxe" in text
+    assert "https://t.me/nebuluxe" in text
+    assert "github.com/z-mio" not in text
+    assert "/ocfg" in text
+
+
+@pytest.mark.parametrize("language", ["zh-hans", "zh-hant", "en-us", "ja-jp"])
+def test_legacy_inline_help_retains_instance_attribution(language: str) -> None:
+    text = helpers.build_start_text()[language]
+    assert "Source: @nebuluxe" in text
+    assert "github.com/z-mio" not in text
+
+
+def test_merged_translations_are_valid_and_keep_instance_attribution() -> None:
+    directory = Path(__file__).resolve().parents[1] / "i18n"
+    files = list(directory.glob("*.yaml"))
+    assert len(files) == 16
+    for file in files:
+        text = file.read_text(encoding="utf-8")
+        data = safe_load(text)
+        assert isinstance(data, dict)
+        assert all(isinstance(key, str) and isinstance(value, str) for key, value in data.items())
+        assert not any(marker in text for marker in ("<<<<<<<", "=======", ">>>>>>>"))
+        assert "**Source: @nebuluxe**" in text

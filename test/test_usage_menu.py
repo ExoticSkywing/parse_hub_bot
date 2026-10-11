@@ -19,6 +19,11 @@ def client() -> Any:
     )
 
 
+@pytest.fixture(autouse=True)
+def platform_admins_default_to_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(usage_menu.bs, "admin_ids", [])
+
+
 def test_menu_only_targets_admin_private_chats(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USAGE_ADMIN_IDS", "123,456")
     cli = client()
@@ -67,7 +72,9 @@ def test_unchanged_menu_is_not_written_again(monkeypatch: pytest.MonkeyPatch) ->
     cli.set_bot_commands.assert_awaited_once()
 
 
-@pytest.mark.parametrize("method", ["get_bot_commands", "set_bot_commands", "get_chat_menu_button", "set_chat_menu_button"])
+@pytest.mark.parametrize("method", [
+    "get_bot_commands", "set_bot_commands", "get_chat_menu_button", "set_chat_menu_button",
+])
 def test_menu_error_does_not_block_startup_or_other_admins(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
     monkeypatch.setenv("USAGE_ADMIN_IDS", "123,456")
     cli = client()
@@ -76,3 +83,35 @@ def test_menu_error_does_not_block_startup_or_other_admins(monkeypatch: pytest.M
     asyncio.run(usage_menu.set_admin_menu(cli))
     assert mocked.await_count == 2
     assert cli.set_chat_menu_button.call_args.kwargs["chat_id"] == 456
+
+
+def test_platform_menu_is_available_without_usage_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("USAGE_ADMIN_IDS", "")
+    monkeypatch.setattr(usage_menu.bs, "admin_ids", [789])
+    cli = client()
+    asyncio.run(usage_menu.set_admin_menu(cli))
+    cli.set_bot_commands.assert_awaited_once()
+    args = cli.set_bot_commands.call_args
+    assert args.kwargs["scope"].chat_id == 789
+    assert [command.command for command in args.args[0]] == [*COMMANDS, "admin"]
+    assert usage_menu.admin_ids() == frozenset()
+
+
+def test_overlapping_admin_menus_are_combined_without_permission_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("USAGE_ADMIN_IDS", "123,456")
+    monkeypatch.setattr(usage_menu.bs, "admin_ids", [123, 789])
+    cli = client()
+    asyncio.run(usage_menu.set_admin_menu(cli))
+    assert cli.set_bot_commands.await_count == 3
+    menus = {
+        args.kwargs["scope"].chat_id: [command.command for command in args.args[0]]
+        for args in cli.set_bot_commands.await_args_list
+    }
+    assert menus == {
+        123: [*COMMANDS, "admin", "stats", "user"],
+        456: [*COMMANDS, "stats", "user"],
+        789: [*COMMANDS, "admin"],
+    }
+    assert usage_menu.admin_ids() == frozenset({123, 456})
+    assert usage_menu.bs.admin_ids == [123, 789]
+    assert not {"admin", "stats", "user"} & COMMANDS.keys()
