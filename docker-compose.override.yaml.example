@@ -1,0 +1,18 @@
+# 复制为 docker-compose.override.yaml 后按需调整；实际文件不会提交到 Git。
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: parse_hub_bot:local
+    environment:
+      YTDLP_COOKIES_DIR: /app/cookies
+    volumes:
+      # /admin 原子保存配置需要目录可写，不能只挂载单个 YAML 文件。
+      - ./data/config:/app/data/config:rw
+      # Cookie 文件由宿主机维护；机器人不需要写入它们。
+      - ${YTDLP_COOKIES_DIR:-/root/data/ytdlp-cookies}:/app/cookies:ro
+
+volumes:
+  data:
+  logs:
