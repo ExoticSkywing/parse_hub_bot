@@ -2,7 +2,9 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
+import httpx
 import pytest
+from parsehub.types import ParseError, Platform
 
 from services import parser as parser_module
 
@@ -58,3 +60,66 @@ def test_raw_url_uses_direct_connection_only_for_final_retry(service) -> None:
         call(URL, proxy=PROXY, clean_all=True),
         call(URL, proxy=None, clean_all=True),
     ]
+
+
+@pytest.mark.parametrize("method_name", ["parse", "get_raw_url"])
+def test_tiktok_skips_duplicate_proxy_attempt(service, method_name: str) -> None:
+    parse_service, parser = service
+    parser.get_platform = lambda url: Platform.TIKTOK
+    method = getattr(parser, method_name)
+    result = URL
+    method.side_effect = [RuntimeError("proxy failed"), result]
+    assert asyncio.run(getattr(parse_service, method_name)(URL)) is result
+    assert [args.kwargs["proxy"] for args in method.await_args_list] == [PROXY, None]
+
+
+@pytest.mark.parametrize("method_name", ["parse", "get_raw_url"])
+def test_tiktok_does_not_repeat_direct_failure(service, monkeypatch: pytest.MonkeyPatch, method_name: str) -> None:
+    parse_service, parser = service
+    parser.get_platform = lambda url: Platform.TIKTOK
+    monkeypatch.setattr(parser_module.pl_cfg, "roll_parser_proxy", lambda platform: None)
+    error = RuntimeError("direct failed")
+    method = getattr(parser, method_name)
+    method.side_effect = error
+    with pytest.raises(RuntimeError) as raised:
+        asyncio.run(getattr(parse_service, method_name)(URL))
+    assert raised.value is error
+    assert method.await_count == 1
+
+
+@pytest.mark.parametrize("method_name", ["parse", "get_raw_url"])
+def test_tiktok_preserves_final_exception(service, method_name: str) -> None:
+    parse_service, parser = service
+    parser.get_platform = lambda url: Platform.TIKTOK
+    error = RuntimeError("direct failed")
+    method = getattr(parser, method_name)
+    method.side_effect = [RuntimeError("proxy failed"), error]
+    with pytest.raises(RuntimeError) as raised:
+        asyncio.run(getattr(parse_service, method_name)(URL))
+    assert raised.value is error
+    assert method.await_count == 2
+
+
+@pytest.mark.parametrize("method_name", ["parse", "get_raw_url"])
+def test_tiktok_rate_limit_does_not_trigger_direct_retry(service, method_name: str) -> None:
+    parse_service, parser = service
+    parser.get_platform = lambda url: Platform.TIKTOK
+    request = httpx.Request("GET", URL)
+    response = httpx.Response(429, request=request)
+    error = ParseError("request rate limited")
+    error.__cause__ = httpx.HTTPStatusError("rate limited", request=request, response=response)
+    method = getattr(parser, method_name)
+    method.side_effect = error
+    with pytest.raises(ParseError) as raised:
+        asyncio.run(getattr(parse_service, method_name)(URL))
+    assert raised.value is error
+    assert method.await_count == 1
+
+
+def test_tiktok_cancel_does_not_retry(service) -> None:
+    parse_service, parser = service
+    parser.get_platform = lambda url: Platform.TIKTOK
+    parser.parse.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(parse_service.parse(URL))
+    assert parser.parse.await_count == 1

@@ -13,7 +13,12 @@ from parsehub.utils.helpers import SecretCookie
 from pydantic import SecretStr
 
 from extensions.instagram_cookie import CookieFirstInstagramParser, enable_instagram_cookie_priority
-from extensions.tiktok_web import WebFirstTikTokParser, enable_tiktok_web_priority
+from extensions.tiktok_web import (
+    TikTokParseError,
+    WebFirstTikTokParser,
+    enable_tiktok_web_priority,
+    is_tiktok_rate_limited,
+)
 
 ITEM_ID = "7318518857994389254"
 URL = f"https://www.tiktok.com/@example/video/{ITEM_ID}"
@@ -55,13 +60,13 @@ def web_html(node: dict) -> str:
 def mock_http(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     state = SimpleNamespace(
         requests=[], web_status=200, web_body=web_html(video_node()), web_error=None,
-        feed_status=200, feed_node=video_node(), feed_empty=False,
+        feed_status=200, feed_node=video_node(), feed_empty=False, feed_error=None,
         redirect_target=URL, client_proxies=[], sleep=AsyncMock(),
     )
 
     def respond(request: httpx.Request) -> httpx.Response:
         state.requests.append(request)
-        if request.url.host in ("vt.tiktok.com", "vm.tiktok.com"):
+        if request.url.host in ("vt.tiktok.com", "vm.tiktok.com") or request.url.path.startswith("/t/"):
             return httpx.Response(301, headers={"location": state.redirect_target})
         if request.url.host == "www.tiktok.com":
             if state.web_error:
@@ -69,6 +74,8 @@ def mock_http(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             return httpx.Response(state.web_status, text=state.web_body)
         assert str(request.url).startswith(TIKTOK_APP_FEED)
         assert request.url.params["aweme_id"] == ITEM_ID
+        if state.feed_error:
+            raise state.feed_error
         if state.feed_empty:
             return httpx.Response(state.feed_status, text="")
         return httpx.Response(state.feed_status, json={"aweme_list": [state.feed_node]})
@@ -110,8 +117,8 @@ def test_video_uses_web_first_with_cookie_and_upstream_result(mock_http: SimpleN
 
 
 @pytest.mark.parametrize("failure, web_attempts", [
-    ("missing_data", 3), ("invalid_media", 1), ("wrong_id", 1),
-    ("http_401", 1), ("http_429", 1), ("timeout", 1),
+    ("missing_data", 1), ("invalid_media", 1), ("wrong_id", 1),
+    ("http_401", 1), ("timeout", 1),
 ])
 def test_web_failure_uses_only_app_fallback(
     mock_http: SimpleNamespace, failure: str, web_attempts: int,
@@ -136,12 +143,50 @@ def test_web_failure_uses_only_app_fallback(
 def test_both_paths_fail_without_second_web_round(mock_http: SimpleNamespace) -> None:
     mock_http.web_body = "<html></html>"
     mock_http.feed_empty = True
+    with pytest.raises(TikTokParseError) as error:
+        asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
+    assert stages(mock_http) == ["web", "feed"]
+    mock_http.sleep.assert_not_awaited()
+    assert "__UNIVERSAL_DATA_FOR_REHYDRATION__" in str(error.value.web_error)
+    assert "Expecting value" in str(error.value.app_error)
+    assert "web=RuntimeError:" in str(error.value)
+    assert "app=RuntimeError:" in str(error.value)
+    assert error.value.__cause__ is error.value.app_error
+
+
+def test_web_rate_limit_stops_before_app(mock_http: SimpleNamespace) -> None:
+    mock_http.web_status = 429
     with pytest.raises(ParseError) as error:
         asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
-    assert stages(mock_http) == ["web"] * 3 + ["feed"] * 3
-    assert mock_http.sleep.await_count == 4
-    assert error.value.__cause__ is not None
-    assert error.value.__cause__.__context__ is not None
+    assert "请求过于频繁" in str(error.value)
+    assert is_tiktok_rate_limited(error.value)
+    assert stages(mock_http) == ["web"]
+    mock_http.sleep.assert_not_awaited()
+
+
+@pytest.mark.parametrize("status", [401, 429, 503])
+def test_app_http_failure_is_preserved(mock_http: SimpleNamespace, status: int) -> None:
+    mock_http.web_body = "<html></html>"
+    mock_http.feed_status = status
+    with pytest.raises(TikTokParseError) as error:
+        asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
+    assert isinstance(error.value.app_error, httpx.HTTPStatusError)
+    assert error.value.app_error.response.status_code == status
+    assert is_tiktok_rate_limited(error.value) is (status == 429)
+    assert "app=HTTPStatusError:" in str(error.value)
+    assert stages(mock_http) == ["web", "feed"]
+    mock_http.sleep.assert_not_awaited()
+
+
+def test_app_error_does_not_reuse_web_http_error(mock_http: SimpleNamespace) -> None:
+    mock_http.web_status = 401
+    mock_http.feed_empty = True
+    with pytest.raises(TikTokParseError) as error:
+        asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
+    assert isinstance(error.value.web_error, httpx.HTTPStatusError)
+    assert "Expecting value" in str(error.value.app_error)
+    assert not is_tiktok_rate_limited(error.value)
+    assert stages(mock_http) == ["web", "feed"]
 
 
 def test_photo_keeps_upstream_app_route(mock_http: SimpleNamespace) -> None:
@@ -152,12 +197,16 @@ def test_photo_keeps_upstream_app_route(mock_http: SimpleNamespace) -> None:
     assert stages(mock_http) == ["feed"]
 
 
-@pytest.mark.parametrize("host", ["vt.tiktok.com", "vm.tiktok.com"])
-def test_shortlink_is_expanded_before_video_routing(mock_http: SimpleNamespace, host: str) -> None:
-    result = asyncio.run(patched_hub().parse(f"https://{host}/TestCookie/", cookie=COOKIE))
+@pytest.mark.parametrize("short_url", [
+    "https://vt.tiktok.com/TestCookie/", "https://vm.tiktok.com/TestCookie/",
+    "https://www.tiktok.com/t/TestCookie/", "https://m.tiktok.com/t/TestCookie/",
+])
+def test_shortlink_is_expanded_before_video_routing(mock_http: SimpleNamespace, short_url: str) -> None:
+    result = asyncio.run(patched_hub().parse(short_url, cookie=COOKIE))
     assert isinstance(result, TikTokVideoParseResult)
     assert result.raw_url == URL
-    assert [request.url.host for request in mock_http.requests] == [host, "www.tiktok.com", "www.tiktok.com"]
+    assert str(mock_http.requests[0].url) == short_url
+    assert [request.url.host for request in mock_http.requests[1:]] == ["www.tiktok.com", "www.tiktok.com"]
     assert "sessionid=test-session" in mock_http.requests[-1].headers["cookie"]
 
 
@@ -182,6 +231,14 @@ def test_cancelled_web_request_does_not_trigger_app(mock_http: SimpleNamespace) 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
     assert stages(mock_http) == ["web"]
+
+
+def test_cancelled_app_request_is_not_wrapped(mock_http: SimpleNamespace) -> None:
+    mock_http.web_body = "<html></html>"
+    mock_http.feed_error = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
+    assert stages(mock_http) == ["web", "feed"]
 
 
 def test_unrecognized_link_is_delegated_to_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,3 +276,31 @@ def test_bot_service_uses_web_priority(mock_http: SimpleNamespace, monkeypatch: 
     ))
     assert isinstance(asyncio.run(service_module.ParseService().parse(URL)), TikTokVideoParseResult)
     assert stages(mock_http) == ["web"]
+
+
+@pytest.mark.parametrize("proxy, feed_status, expected_stages", [
+    (None, 200, ["web", "feed"]),
+    ("http://example.com:8080", 200, ["web", "feed", "web", "feed"]),
+    ("http://example.com:8080", 429, ["web", "feed"]),
+])
+def test_bot_failure_request_budget(
+    mock_http: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+    proxy: str | None, feed_status: int, expected_stages: list[str],
+) -> None:
+    from services import parser as service_module
+
+    mock_http.web_body = "<html></html>"
+    mock_http.feed_empty = True
+    mock_http.feed_status = feed_status
+    monkeypatch.setattr(service_module.ParseService, "_instance", None)
+    monkeypatch.setattr(service_module, "pl_cfg", SimpleNamespace(
+        roll_cookie=lambda platform: SecretStr(COOKIE),
+        roll_parser_proxy=lambda platform: proxy,
+    ))
+    with pytest.raises(TikTokParseError) as error:
+        asyncio.run(service_module.ParseService().parse(URL))
+    assert stages(mock_http) == expected_stages
+    assert "web=" in str(error.value) and "app=" in str(error.value)
+    if len(expected_stages) == 4:
+        assert mock_http.client_proxies == [proxy, proxy, None, None]
+    mock_http.sleep.assert_not_awaited()
