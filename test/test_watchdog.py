@@ -1,58 +1,20 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+import os
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import MagicMock, patch
 
 import pytest
+from pyrogram import Client
+from pyrogram.session import Session
 from pyrogram.session.session import AuthKeyNotFound
 
-from bot import setup_loop_exception_handler
-from core.watchdog import heartbeat_worker, remove_session_file
+os.environ.setdefault("BOT_TOKEN", "123456:watchdog-test-token")
+os.environ.setdefault("API_ID", "123456")
+os.environ.setdefault("API_HASH", "watchdog-test-hash")
 
-
-@pytest.mark.anyio
-async def test_remove_session_file_cleans_auxiliary_files(tmp_path):
-    cli = MagicMock()
-    cli.name = "testbot"
-    cli.workdir = tmp_path
-    cli.session = AsyncMock()
-    cli.storage = AsyncMock()
-
-    session_file = tmp_path / "testbot.session"
-    journal_file = tmp_path / "testbot.session-journal"
-    wal_file = tmp_path / "testbot.session-wal"
-
-    session_file.write_text("data")
-    journal_file.write_text("journal")
-    wal_file.write_text("wal")
-
-    await remove_session_file(cli)
-
-    assert not session_file.exists()
-    assert not journal_file.exists()
-    assert not wal_file.exists()
-
-
-@pytest.mark.anyio
-async def test_heartbeat_worker_triggers_restart_on_consecutive_failures():
-    cli = MagicMock()
-    cli.is_connected = False
-    cli.session = None
-
-    with (
-        patch("core.watchdog.trigger_restart", new_callable=AsyncMock) as mock_restart,
-        patch("core.watchdog.ws") as mock_ws,
-    ):
-        mock_ws.exit_flag = False
-        mock_ws.is_running = True
-
-        async def stop_after_delay():
-            await asyncio.sleep(0.05)
-            mock_ws.exit_flag = True
-
-        task = asyncio.create_task(heartbeat_worker(cli, interval=0.01))
-        asyncio.create_task(stop_after_delay())
-        await task
-
-        assert mock_restart.await_count >= 1
+import core.watchdog as watchdog  # noqa: E402
+from bot import setup_loop_exception_handler  # noqa: E402
 
 
 def test_loop_exception_handler_fatal_auth_key_not_found():
@@ -70,3 +32,199 @@ def test_loop_exception_handler_fatal_auth_key_not_found():
         handler(loop, context)
         mock_exit.assert_called_once_with(1)
     loop.close()
+
+
+@pytest.fixture(autouse=True)
+def watchdog_state(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    exit_codes: list[int] = []
+    monkeypatch.setattr(watchdog, "ws", SimpleNamespace(exit_flag=False, reconnect_grace_seconds=0.2))
+    monkeypatch.setattr(watchdog.os, "_exit", exit_codes.append)
+    monkeypatch.setattr(watchdog, "STOP_TIMEOUT", 0.03)
+    watchdog._grace_task = None
+    watchdog._disconnected_at = None
+    return exit_codes
+
+
+class FakeClient:
+    def __init__(self, session: SimpleNamespace) -> None:
+        self.main_session = session
+        self.stop_calls = 0
+        self.stop_task: asyncio.Task[Any] | None = None
+        self.stop_path_task_cancelled = False
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
+        self.stop_task = asyncio.current_task()
+        watchdog.ws.exit_flag = True
+        await watchdog.on_disconnect(cast(Client, self), cast(Session, self.main_session))
+        self.stop_path_task_cancelled = bool(self.stop_task and self.stop_task.cancelling())
+
+
+def main_session() -> SimpleNamespace:
+    return SimpleNamespace(is_media=False)
+
+
+async def disconnect(client: FakeClient, session: SimpleNamespace) -> None:
+    await watchdog.on_disconnect(cast(Client, client), cast(Session, session))
+
+
+async def connect(client: FakeClient, session: SimpleNamespace) -> None:
+    await watchdog.on_connect(cast(Client, client), cast(Session, session))
+
+
+def test_duplicate_disconnect_callbacks_share_grace_and_recovery_cancels_it(watchdog_state: list[int]) -> None:
+    async def scenario() -> None:
+        session = main_session()
+        client = FakeClient(session)
+
+        await disconnect(client, session)
+        first_task = watchdog._grace_task
+        await asyncio.sleep(0.004)
+        await disconnect(client, session)
+
+        assert watchdog._grace_task is first_task
+        await connect(client, session)
+        await asyncio.sleep(0.22)
+
+        assert watchdog._grace_task is None
+        assert watchdog_state == []
+        assert client.stop_calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_recovery_within_grace_does_not_stop_client(watchdog_state: list[int]) -> None:
+    async def scenario() -> None:
+        session = main_session()
+        client = FakeClient(session)
+
+        await disconnect(client, session)
+        await asyncio.sleep(0.12)
+        await connect(client, session)
+        await asyncio.sleep(0.11)
+
+        assert watchdog_state == []
+        assert client.stop_calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_permanent_outage_stops_client_and_exits(watchdog_state: list[int]) -> None:
+    async def scenario() -> None:
+        session = main_session()
+        client = FakeClient(session)
+
+        await disconnect(client, session)
+        await asyncio.sleep(0.22)
+
+        assert watchdog_state == [1]
+        assert client.stop_calls == 1
+        assert not client.stop_path_task_cancelled
+
+    asyncio.run(scenario())
+
+
+def test_normal_shutdown_does_not_schedule_exit(watchdog_state: list[int]) -> None:
+    async def scenario() -> None:
+        session = main_session()
+        client = FakeClient(session)
+        watchdog.ws.exit_flag = True
+
+        await disconnect(client, session)
+
+        assert watchdog._grace_task is None
+        assert watchdog_state == []
+        assert client.stop_calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_media_disconnect_does_not_schedule_exit(watchdog_state: list[int]) -> None:
+    async def scenario() -> None:
+        session = SimpleNamespace(is_media=True)
+        client = FakeClient(session)
+
+        await disconnect(client, session)
+
+        assert watchdog._grace_task is None
+        assert watchdog_state == []
+        assert client.stop_calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_during_grace_cancels_pending_task(watchdog_state: list[int]) -> None:
+    async def scenario() -> None:
+        session = main_session()
+        client = FakeClient(session)
+
+        await disconnect(client, session)
+        grace_task = watchdog._grace_task
+        watchdog.ws.exit_flag = True
+        await disconnect(client, session)
+        await asyncio.sleep(0.22)
+
+        assert grace_task is not None and grace_task.cancelled()
+        assert watchdog._grace_task is None
+        assert watchdog_state == []
+        assert client.stop_calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_hanging_stop_times_out_and_exits(watchdog_state: list[int]) -> None:
+    class HangingClient(FakeClient):
+        async def stop(self) -> None:
+            self.stop_calls += 1
+            await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        session = main_session()
+        client = HangingClient(session)
+
+        await disconnect(client, session)
+        await asyncio.sleep(0.24)
+
+        assert watchdog_state == [1]
+        assert client.stop_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_stop_error_does_not_prevent_exit(watchdog_state: list[int]) -> None:
+    class FailingClient(FakeClient):
+        async def stop(self) -> None:
+            self.stop_calls += 1
+            raise ConnectionError("cannot stop")
+
+    async def scenario() -> None:
+        session = main_session()
+        client = FailingClient(session)
+
+        await disconnect(client, session)
+        await asyncio.sleep(0.22)
+
+        assert watchdog_state == [1]
+        assert client.stop_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_recovered_connection_can_start_a_new_outage(watchdog_state: list[int]) -> None:
+    async def scenario() -> None:
+        session = main_session()
+        client = FakeClient(session)
+
+        await disconnect(client, session)
+        first_disconnect = watchdog._disconnected_at
+        await connect(client, session)
+        assert first_disconnect is not None
+        assert watchdog._disconnected_at is None
+
+        await disconnect(client, session)
+        await asyncio.sleep(0.22)
+
+        assert watchdog_state == [1]
+        assert client.stop_calls == 1
+
+    asyncio.run(scenario())

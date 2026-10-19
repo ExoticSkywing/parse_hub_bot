@@ -37,7 +37,8 @@ def test_selected_chinese_platforms_follow_xhs(monkeypatch) -> None:
     ]
     assert len(lines) == len(platforms)
     rows = helpers._platform_table("zh-hans").cells[1:]
-    assert [row[0].text for row in rows] == [line.split("**", 2)[1] for line in lines]
+    ordered_table_names = [name for row in rows for name in (row[0].text, row[2].text) if name]
+    assert ordered_table_names == [line.split("**", 2)[1] for line in lines]
 
 
 def test_order_falls_back_to_existing_sort_without_xhs(monkeypatch) -> None:

@@ -37,6 +37,7 @@
 
 - 🎬 **多平台解析** — 抖音、B站、YouTube、小红书、Twitter 等 20+ 主流平台一站搞定
 - ⚡ **内联模式** — 在任意聊天窗口输入 `@BotUsername <链接>` 即可解析
+- 👥 **访客模式** — 在任意聊天内 `@BotUsername` 即可解析
 - 🖼️ **Tg 兼容** — 自动转码、长图切割、大视频分段
 - 📦 **多种模式** — 在线预览, 原始文件, 打包下载
 - 🐳 **Docker 部署** — 开箱即用
@@ -57,6 +58,7 @@
 | **小红书**      |  ✅  |  ✅  |                             |
 | **贴吧**        |  ✅  |  ✅  |                             |
 | **微信公众号**  |      |  ✅  |                             |
+| **微信视频号**  |  ✅  |      |                             |
 | **快手**        |  ✅  |  ✅  |                             |
 | **酷安**        |      |  ✅  |                             |
 | **皮皮虾**      |  ✅  |  ✅  |                             |
@@ -83,6 +85,7 @@ docker run -d \
   -e API_ID=你的API_ID \
   -e API_HASH=你的API_HASH \
   -e BOT_TOKEN=你的BOT_TOKEN \
+  -e ADMIN_IDS=你的TG用户ID \
   -v ./logs:/app/logs \
   -v ./data:/app/data \
   --name parse-hub-bot \
@@ -113,11 +116,60 @@ BOT_TOKEN=     # 机器人 Token，向 @BotFather 申请
 
 # 🔲 可选
 BOT_PROXY=     # Bot 连接 TG 使用的代理，例：http://127.0.0.1:7890
+ADMIN_IDS=     # 管理员的 TG 用户 ID，逗号分隔，例：123456789,987654321
+               # 管理员可私聊使用 /admin 管理平台配置，并接收 Cookie 失效告警
 ```
 
 ### 🌐 平台配置
 
-用于为各解析平台单独配置 **代理**和 **Cookie**，位于 `data/config/platform_config.yaml`
+用于为各解析平台单独配置 **代理** 和 **Cookie**，推荐通过 `/admin` 在线管理，修改后立即生效，无需重启。
+
+#### 🛠️ 在线管理
+
+1. 在 `.env` 中填写 `ADMIN_IDS`
+2. 私聊 Bot 发送 `/admin` 打开配置面板
+
+- **全局默认代理** — 设置解析 / 下载的默认代理池
+- **平台配置** — 按平台选择代理模式（全局 / 专用 / 直连），管理专用代理池和 Cookie
+- **一键测试** — 测试代理连通性；发送链接，用所选 Cookie 逐条解析验证是否可用
+- **失效告警** — Cookie 连续解析失败 3 次时通知管理员，可直接跳转更换并用原链接重试
+- **导入 / 导出** — 导出完整配置备份，导入文件或 YAML 整份替换；手动改过文件后点「重载配置」生效
+
+### 🔀 代理优先级
+
+解析代理和下载代理各自遵循相同的优先级逻辑：
+
+```
+禁用代理 (disable_*_proxy: true)
+  ↓ 未禁用
+平台专用代理 (parser_proxies / downloader_proxies)
+  ↓ 未配置
+全局默认代理 (default_parser_proxies / default_downloader_proxies)
+  ↓ 未配置
+直连（不使用代理）
+```
+
+> 💡 当代理池中有多个地址时，每次请求会 **随机选取**一个
+
+### 🍪 支持 Cookie 的平台
+
+- `Twitter / X`
+- `Instagram`
+- `Threads`
+- `YouTube`
+- `Bilibili`
+- `抖音`
+- `TikTok`
+- `快手`
+- `小红书`
+- `知乎`
+- `豆瓣`
+- `微信视频号`（需要填腾讯元宝 yuanbao.tencent.com 登录后的 Cookie）
+
+<details>
+<summary>📄 手动编辑配置文件</summary>
+
+配置文件位于 `data/config/platform_config.yaml`，也可以直接编辑，修改后在 `/admin` 点「重载配置」或重启 Bot 生效。
 
 ```yaml
 # ═══════════════════════ 全局默认代理 ═══════════════════════
@@ -155,67 +207,26 @@ Netscape 格式文件并转换为平台所需的 Cookie，Cookie 不会以明文
 docker compose up -d --build
 ```
 
-### 🔀 代理优先级
-
-解析代理和下载代理各自遵循相同的优先级逻辑：
-
-```
-禁用代理 (disable_*_proxy: true)
-  ↓ 未禁用
-平台专用代理 (parser_proxies / downloader_proxies)
-  ↓ 未配置
-全局默认代理 (default_parser_proxies / default_downloader_proxies)
-  ↓ 未配置
-直连（不使用代理）
-```
-
-> 💡 当代理池中有多个地址时，每次请求会 **随机选取**一个
-
-### 🔑 支持的平台 ID
+#### 🔑 支持的平台 ID
 
 `<platform_id>` 必须是以下合法的平台 ID：
 
-| 平台 ID     | 对应平台    |
-|:------------|:------------|
-| `twitter`   | Twitter / X |
-| `instagram` | Instagram   |
-| `youtube`   | YouTube     |
-| `facebook`  | Facebook    |
-| `threads`   | Threads     |
-| `bilibili`  | 哔哩哔哩    |
-| `douyin`    | 抖音        |
-| `tiktok`    | TikTok      |
-| `weibo`     | 微博        |
-| `xhs`       | 小红书      |
-| `tieba`     | 百度贴吧    |
-| `weixin`    | 微信公众号  |
-| `kuaishou`  | 快手        |
-| `coolapk`   | 酷安        |
-| `pipix`     | 皮皮虾      |
-| `zuiyou`    | 最右        |
-| `xiaoheihe` | 小黑盒      |
-| `snapchat`  | Snapchat    |
-| `zhihu`     | 知乎        |
-| `douban`    | 豆瓣        |
-| `bangumi`   | Bangumi     |
-| `toutiao`   | 今日头条    |
-| `medium`    | Medium      |
+| 平台 ID           | 对应平台    | 平台 ID     | 对应平台   |
+|:------------------|:------------|:------------|:-----------|
+| `twitter`         | Twitter / X | `instagram` | Instagram  |
+| `youtube`         | YouTube     | `facebook`  | Facebook   |
+| `threads`         | Threads     | `bilibili`  | 哔哩哔哩   |
+| `douyin`          | 抖音        | `tiktok`    | TikTok     |
+| `weibo`           | 微博        | `xhs`       | 小红书     |
+| `tieba`           | 百度贴吧    | `weixin`    | 微信公众号 |
+| `weixin_channels` | 微信视频号  | `kuaishou`  | 快手       |
+| `coolapk`         | 酷安        | `pipix`     | 皮皮虾     |
+| `zuiyou`          | 最右        | `xiaoheihe` | 小黑盒     |
+| `snapchat`        | Snapchat    | `zhihu`     | 知乎       |
+| `douban`          | 豆瓣        | `bangumi`   | Bangumi    |
+| `toutiao`         | 今日头条    | `medium`    | Medium     |
 
-### 🍪 支持 Cookie 的平台
-
-- `Twitter / X`
-- `Instagram`
-- `Threads`
-- `YouTube`
-- `Bilibili`
-- `抖音`
-- `TikTok`
-- `快手`
-- `小红书`
-- `知乎`
-- `豆瓣`
-
-### 📌 配置示例
+#### 📌 配置示例
 
 ##### 示例 1：国内平台直连，海外平台走代理
 
@@ -235,7 +246,7 @@ platforms:
     disable_downloader_proxy: true
 ```
 
-#### 示例 2：Twitter 配置 Cookie + 使用全局代理
+##### 示例 2：Twitter 配置 Cookie + 使用全局代理
 
 ```yaml
 default_parser_proxies: http://127.0.0.1:7890
@@ -247,7 +258,7 @@ platforms:
       - "auth_token=your_token_here; ct0=your_ct0_here"
 ```
 
-#### 示例 3：YouTube 使用独立代理池
+##### 示例 3：YouTube 使用独立代理池
 
 ```yaml
 platforms:
@@ -261,7 +272,7 @@ platforms:
       - http://proxy-eu-1:8080
 ```
 
-#### 示例 4：B站指定 Cookie 轮换 + 解析直连 + 下载走代理
+##### 示例 4：B站指定 Cookie 轮换 + 解析直连 + 下载走代理
 
 ```yaml
 platforms:
@@ -273,6 +284,8 @@ platforms:
       - "SESSDATA=xxx; bili_jct=xxx; buvid3=xxx"
       - "SESSDATA=yyy; bili_jct=yyy; buvid3=yyy"
 ```
+
+</details>
 
 ## 🤝 参与贡献
 
