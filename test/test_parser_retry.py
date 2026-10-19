@@ -23,7 +23,6 @@ def service(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(parser_module, "ParseHub", lambda: parser)
     monkeypatch.setattr(parser_module, "enable_instagram_cookie_priority", lambda instance: None)
-    monkeypatch.setattr(parser_module, "enable_tiktok_web_priority", lambda instance: None)
     monkeypatch.setattr(parser_module, "cookie_health", Mock())
     monkeypatch.setattr(
         parser_module,
