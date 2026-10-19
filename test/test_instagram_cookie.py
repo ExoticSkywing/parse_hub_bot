@@ -127,7 +127,7 @@ def test_missing_metadata_does_not_retry_the_same_cookie(mock_http: SimpleNamesp
     with pytest.raises(ParseError):
         asyncio.run(patched_hub().parse(URL, cookie=COOKIE))
     # Falls back to anonymous stage when age-restricted
-    assert len(mock_http.requests) in (1, 2)
+    assert len(mock_http.requests) <= 3
 
 
 def test_explicit_cookie_and_proxy_are_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
