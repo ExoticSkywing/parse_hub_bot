@@ -10,7 +10,6 @@ from parsehub.types import (
 
 from core import pl_cfg
 from extensions.instagram_cookie import enable_instagram_cookie_priority
-from extensions.tiktok_web import enable_tiktok_web_priority, is_tiktok_rate_limited
 from log import logger
 
 from .cookie_health import cookie_health
@@ -23,7 +22,7 @@ def _used_cookie(e: BaseException) -> bool:
 
 
 def _cookie_failure(pr: AnyParseResult) -> FallbackAttempt | None:
-    return next((a for a in pr.fallback_errors if _used_cookie(a.error)), None)
+    return next((a for a in getattr(pr, "fallback_errors", []) if _used_cookie(a.error)), None)
 
 
 class ParseService:
@@ -37,7 +36,6 @@ class ParseService:
     def __init__(self) -> None:
         self.parser = ParseHub()
         enable_instagram_cookie_priority(self.parser)
-        enable_tiktok_web_priority(self.parser)
 
     def get_platform(self, url: str) -> Platform:
         p = self.parser.get_platform(url)
@@ -49,8 +47,7 @@ class ParseService:
         logger.debug(f"开始解析 {url}")
         p = self.get_platform(url)
 
-        is_tiktok = p is Platform.TIKTOK
-        max_retries = 2 if is_tiktok else 3
+        max_retries = 3
         for attempt in range(1, max_retries + 1):
             proxy = None
             cookie = pl_cfg.roll_cookie(p.id)
@@ -63,7 +60,7 @@ class ParseService:
                 logger.debug(f"使用配置: proxy={proxy}, cookie={cookie}, attempt={attempt}/{max_retries}")
                 pr = await self.parser.parse(url, cookie=cookie_value, proxy=proxy)
                 logger.debug(f"解析完成: {pr}")
-                if pr.fallback_errors:
+                if getattr(pr, "fallback_errors", None):
                     logger.warning(
                         "解析成功, 但前面的回退层失败: "
                         + "; ".join(f"{a.name}: {a.error}" for a in pr.fallback_errors)
@@ -80,9 +77,6 @@ class ParseService:
                     raise
                 if cookie_value and _used_cookie(e):
                     cookie_health.record_failure(p.id, cookie_value, e, url)
-                # Do not repeat the same direct path or keep requesting after HTTP 429.
-                if is_tiktok and (not proxy or attempt >= max_retries or is_tiktok_rate_limited(e)):
-                    raise
                 if attempt >= max_retries:
                     raise
         raise
@@ -104,8 +98,7 @@ class ParseService:
     async def get_raw_url(self, url: str, clean_all: bool = True) -> str:
         p = self.get_platform(url)
 
-        is_tiktok = p is Platform.TIKTOK
-        max_retries = 2 if is_tiktok else 3
+        max_retries = 3
         for attempt in range(1, max_retries + 1):
             proxy = None
             try:
@@ -120,8 +113,6 @@ class ParseService:
             except Exception as e:
                 logger.warning(f"获取原始 URL 失败, attempt={attempt}/{max_retries}, err={e}")
                 if isinstance(e, ContentUnavailableError):
-                    raise
-                if is_tiktok and (not proxy or attempt >= max_retries or is_tiktok_rate_limited(e)):
                     raise
                 if attempt >= max_retries:
                     raise

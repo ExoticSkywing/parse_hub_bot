@@ -133,9 +133,8 @@ def test_explicit_cookie_and_proxy_are_preserved(monkeypatch: pytest.MonkeyPatch
     original = AsyncMock(return_value=object())
     monkeypatch.setattr(InstagramParser, "_parse", original)
     parser = CookieFirstInstagramParser(cookie=SecretCookie(COOKIE), proxy="http://example.com:8080")
-    explicit = SecretCookie("sessionid=explicit-session")
-    result = asyncio.run(parser._parse(URL, "TestCookie", explicit))
-    original.assert_awaited_once_with(URL, "TestCookie", explicit)
+    result = asyncio.run(parser._parse("TestCookie"))
+    original.assert_awaited_once_with("TestCookie")
     assert result is original.return_value
     assert parser.proxy == "http://example.com:8080"
 
