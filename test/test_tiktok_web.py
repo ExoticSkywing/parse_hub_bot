@@ -7,7 +7,10 @@ import httpx
 import pytest
 from parsehub import ParseHub
 from parsehub.parsers.parser.tiktok import TikTokParser, TikTokVideoParseResult
-from parsehub.provider_api.tiktok import TIKTOK_APP_FEED
+try:
+    from parsehub.provider_api.tiktok import TIKTOK_APP_FEED
+except ImportError:
+    TIKTOK_APP_FEED = "https://api22-normal-c-alisg.tiktokv.com/aweme/v1/feed/"
 from parsehub.types import ContentUnavailableError, ImageParseResult, ParseError, Platform
 from parsehub.utils.helpers import SecretCookie
 from pydantic import SecretStr
