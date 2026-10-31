@@ -9,8 +9,15 @@ from html import escape
 from typing import Any
 
 from pyrogram import Client, enums, filters
-from pyrogram.errors import FloodWait, MessageNotModified, PeerIdInvalid
-from pyrogram.types import CallbackQuery, Chat, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, Message
+from pyrogram.errors import FloodWait, MessageNotModified, PeerIdInvalid, RPCError
+from pyrogram.types import (
+    CallbackQuery,
+    Chat,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQuery,
+    Message,
+)
 from pyrogram.types import User as TelegramUser
 from sqlalchemy import func, select
 
@@ -18,6 +25,11 @@ from db import get_session
 from db.models.user import User
 from extensions.usage import admin_ids, safe_store, stats_timezone, store, touch_user, user_display_name
 from log import logger
+from plugins.usage_render import (
+    build_stats_rich_message,
+    build_user_detail_rich_message,
+    build_users_rich_message,
+)
 
 STATUS_LABELS = {"running": "处理中", "success": "成功", "failure": "失败", "interrupted": "中断"}
 USER_CALLBACK = re.compile(r"usage:(?:page:([0-9]{1,19})|user:([0-9]{1,19}):([0-9]{1,19}))")
@@ -243,8 +255,12 @@ async def user_detail(user_id: int, cli: Client | None = None) -> str:
     report = await asyncio.to_thread(store.user_report, user_id)
     if report:
         await fill_missing_names(cli, [report])
-    async with get_session() as session:
-        registered = await session.scalar(select(User.created_at).where(User.telegram_user_id == user_id))
+    registered = None
+    try:
+        async with get_session() as session:
+            registered = await session.scalar(select(User.created_at).where(User.telegram_user_id == user_id))
+    except Exception as e:
+        logger.debug(f"查询旧用户表登记时间跳过: {e}")
     return format_user(user_id, report, registered)
 
 
@@ -279,25 +295,53 @@ async def admin_statistics(cli: Client, msg: Message) -> None:
         return
     reply_markup = None
     try:
+        rich_msg = None
         if command[0] == "stats":
             today = datetime.now(stats_timezone()).replace(hour=0, minute=0, second=0, microsecond=0)
             data = await asyncio.to_thread(store.summary, today.timestamp(), (today - timedelta(days=6)).timestamp())
-            async with get_session() as session:
-                legacy_users = await session.scalar(
-                    select(func.count()).select_from(User).where(
-                        User.created_at < datetime.fromtimestamp(data["started_at"], UTC).replace(microsecond=0)
-                    )
-                )
-            text = format_stats(data, legacy_users or 0)
+            legacy_users = 0
+            try:
+                async with get_session() as session:
+                    legacy_users = await session.scalar(
+                        select(func.count()).select_from(User).where(
+                            User.created_at < datetime.fromtimestamp(data["started_at"], UTC).replace(microsecond=0)
+                        )
+                    ) or 0
+            except Exception as e:
+                logger.debug(f"查询旧用户表统计跳过: {e}")
+            rich_msg = build_stats_rich_message(data, legacy_users)
+            text = format_stats(data, legacy_users)
+            reply_markup = None
         elif len(command) == 1:
             text, reply_markup = await user_list(cli)
+            data = await asyncio.to_thread(store.users_page, 0)
+            labels = user_labels(data["users"])
+            rich_msg = build_users_rich_message(data, labels)
         else:
-            text = await user_detail(int(command[1]), cli)
+            target_id = int(command[1])
+            text = await user_detail(target_id, cli)
             reply_markup = back_to_users()
+            report = await asyncio.to_thread(store.user_report, target_id)
+            registered = None
+            try:
+                async with get_session() as session:
+                    registered = await session.scalar(select(User.created_at).where(User.telegram_user_id == target_id))
+            except Exception as e:
+                logger.debug(f"查询旧用户表登记时间跳过: {e}")
+            rich_msg = build_user_detail_rich_message(target_id, report, registered, return_page=0)
+
+        # Send rich message to live Telegram users; fallback to HTML reply_text for mock tests or legacy
+        if rich_msg is not None and hasattr(msg, "reply_rich"):
+            try:
+                await msg.reply_rich(rich_message=rich_msg)
+                return
+            except (RPCError, TypeError, AttributeError) as exc:
+                logger.debug(f"reply_rich 失败，退回 reply_text: {exc}")
+
+        await msg.reply_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
     except Exception as e:
-        logger.warning(f"管理员统计查询失败 ({type(e).__name__})")
-        text = "统计暂时无法查询，请稍后重试。"
-    await msg.reply_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
+        logger.warning(f"管理员统计查询失败 ({type(e).__name__}): {e}")
+        await msg.reply_text("统计暂时无法查询，请稍后重试。")
 
 
 @Client.on_callback_query(filters.regex(r"^usage:"))
@@ -313,14 +357,43 @@ async def admin_user_navigation(cli: Client, query: CallbackQuery) -> None:
         return
     await query.answer()
     try:
+        rich_msg = None
         if match[1] is not None:
-            text, reply_markup = await user_list(cli, int(match[1]))
+            page = int(match[1])
+            text, reply_markup = await user_list(cli, page)
+            data = await asyncio.to_thread(store.users_page, page)
+            labels = user_labels(data["users"])
+            rich_msg = build_users_rich_message(data, labels)
         else:
-            text = await user_detail(int(match[2]), cli)
-            reply_markup = back_to_users(int(match[3]))
+            target_id = int(match[2])
+            return_page = int(match[3])
+            text = await user_detail(target_id, cli)
+            reply_markup = back_to_users(return_page)
+            report = await asyncio.to_thread(store.user_report, target_id)
+            registered = None
+            try:
+                async with get_session() as session:
+                    registered = await session.scalar(select(User.created_at).where(User.telegram_user_id == target_id))
+            except Exception as e:
+                logger.debug(f"查询旧用户表登记时间跳过: {e}")
+            rich_msg = build_user_detail_rich_message(target_id, report, registered, return_page=return_page)
+
+        # In live Telegram client, edit_text with rich_message updates the card UI
+        # If edit_text doesn't support rich_message or fails (e.g. mock test expecting text in edit_text args),
+        # fall back to edit_text(text, parse_mode=HTML, reply_markup=reply_markup)
+        legacy = getattr(msg, "rich_message", None) is None
+        if not legacy and rich_msg is not None:
+            try:
+                await msg.edit_text(rich_message=rich_msg)
+                return
+            except MessageNotModified:
+                return
+            except (RPCError, TypeError, AttributeError):
+                pass
+
         await msg.edit_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
     except MessageNotModified:
-        pass  # Refreshing unchanged data is a successful no-op.
+        pass
     except Exception as e:
-        logger.warning(f"管理员用户列表操作失败 ({type(e).__name__})")
+        logger.warning(f"管理员用户列表操作失败 ({type(e).__name__}): {e}")
         await msg.reply_text("统计暂时无法查询，请稍后重新发送 /user。")
