@@ -170,7 +170,8 @@ async def inline_result_download(cli: Client, chosen_result: ChosenInlineResult)
         media_ref = parse_result.media[media_index] if isinstance(parse_result.media, Sequence) else parse_result.media
 
         try:
-            file_paths = processed.output_paths or [processed.source.path]
+            source = getattr(processed, "source", None)
+            file_paths = processed.output_paths or ([source.path] if source else [])
             file_path_str = str(file_paths[0])
             logger.debug(f"inline 上传文件: {file_path_str}")
             width, height, duration = resolve_media_info(processed, file_path_str)
@@ -178,7 +179,7 @@ async def inline_result_download(cli: Client, chosen_result: ChosenInlineResult)
             thumb_path = await _fetch_video_thumb(media_ref)
             try:
                 media: InputMediaAudio | InputMediaVideo
-                if isinstance(processed.source, MusicFile):
+                if isinstance(source, MusicFile):
                     media = InputMediaAudio(
                         file_path_str,
                         thumb=thumb_path,
