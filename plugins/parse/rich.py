@@ -30,9 +30,9 @@ from pyrogram.types import (
     InputRichMessage,
     RichText,
     RichTextBold,
-    RichTextUrl,
 )
 
+from extensions.bot_settings import append_rich_footer_blocks
 from repo.settings import SettingsConfig
 from services import CacheMedia, CacheMediaType, PipelineResult
 from services.media import fetch_thumb, make_thumb, resolve_media_info
@@ -62,8 +62,9 @@ def rich_caption_blocks(
     config: SettingsConfig,
     *,
     custom_content: str = "",
+    inline: bool = False,
 ) -> list[InputRichBlock]:
-    """与常规解析同布局的 caption 块: 粗体标题+短正文 / 标题段 + 可折叠长文, ▎Source 超链接独立段"""
+    """与常规解析同布局的 caption 块: 粗体标题+短正文 / 标题段 + 可折叠长文, 尾部 Source/署名独立段"""
     blocks: list[InputRichBlock] = []
     content = (content or "").strip()
     show_desc = not config.hide_desc and bool(content)
@@ -82,14 +83,7 @@ def rich_caption_blocks(
         blocks.append(InputRichBlockExpandableBlockQuotation(content))  # type: ignore[arg-type]
     if custom_content:
         blocks.append(InputRichBlockParagraph(_strip_markup(custom_content)))  # type: ignore[arg-type]
-    if not config.hide_source:
-        source_runs: list[RichText | str] = [
-            RichTextBold("▎"),  # type: ignore[arg-type]
-            RichTextUrl("Source", raw_url),  # type: ignore[arg-type]
-        ]
-        blocks.append(
-            InputRichBlockParagraph(["\n", RichTextBold(source_runs)])  # type: ignore[arg-type]
-        )
+    append_rich_footer_blocks(blocks, raw_url=raw_url, hide_source=config.hide_source, inline=inline)
     return blocks
 
 

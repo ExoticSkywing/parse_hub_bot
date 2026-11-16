@@ -4,6 +4,7 @@ from typing import Any, Literal, TypedDict, Unpack
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.settings import SettingsScope
+from extensions.bot_settings import apply_global_setting_defaults
 from repo.settings import ParseMode, SettingsConfig, SettingsRepo
 from repo.settings.repo import SettingsTarget
 from repo.settings.schema import DEFAULT_SETTINGS_CONFIG, ConfigMetadata, MergeStrategy
@@ -227,4 +228,5 @@ def _merge_config_patches(scoped_patches: list[tuple[SettingsScope, dict[str, An
 
 
 def _hydrate_config(config_patch: dict[str, Any]) -> SettingsConfig:
-    return SettingsConfig.model_validate(DEFAULT_SETTINGS_CONFIG.model_dump(mode="json") | config_patch)
+    defaults = apply_global_setting_defaults(DEFAULT_SETTINGS_CONFIG.model_dump(mode="json"))
+    return SettingsConfig.model_validate(defaults | config_patch)

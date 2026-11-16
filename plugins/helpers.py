@@ -27,6 +27,7 @@ from pyrogram.types import (
     RichTextUrl,
 )
 
+from extensions.bot_settings import append_caption_footer
 from i18n import t_
 from log import logger
 from repo.settings import SettingsConfig
@@ -171,6 +172,7 @@ def build_caption(
     custom_content: str = "",
     config: SettingsConfig,
     rich: bool = False,
+    inline: bool = False,
 ) -> str:
     return build_caption_by_str(
         parse_result.title,
@@ -184,6 +186,7 @@ def build_caption(
         hide_title=config.hide_title,
         hide_desc=config.hide_desc,
         rich=rich,
+        inline=inline,
     )
 
 
@@ -198,6 +201,7 @@ def build_caption_by_str(
     hide_title: bool = False,
     hide_desc: bool = False,
     rich: bool = False,
+    inline: bool = False,
 ) -> str:
     """构建消息正文：标题 + 内容 + 来源链接"""
     title, content = title or "", content or ""
@@ -217,9 +221,7 @@ def build_caption_by_str(
     if custom_content:
         body += f"\n\n{custom_content}"
 
-    if hide_source:
-        return body
-    return f"{body}\n\n{format_label(f"<a href='{raw_url}'>Source</a>")}"
+    return append_caption_footer(body, raw_url=raw_url, hide_source=hide_source, inline=inline, rich=rich)
 
 
 def format_text(text: str) -> str:

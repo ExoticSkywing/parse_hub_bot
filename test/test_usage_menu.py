@@ -93,7 +93,7 @@ def test_platform_menu_is_available_without_usage_permission(monkeypatch: pytest
     cli.set_bot_commands.assert_awaited_once()
     args = cli.set_bot_commands.call_args
     assert args.kwargs["scope"].chat_id == 789
-    assert [command.command for command in args.args[0]] == [*COMMANDS, "admin"]
+    assert [command.command for command in args.args[0]] == [*COMMANDS, "admin", "botcfg"]
     assert usage_menu.admin_ids() == frozenset()
 
 
@@ -108,10 +108,10 @@ def test_overlapping_admin_menus_are_combined_without_permission_expansion(monke
         for args in cli.set_bot_commands.await_args_list
     }
     assert menus == {
-        123: [*COMMANDS, "admin", "stats", "user"],
+        123: [*COMMANDS, "admin", "botcfg", "stats", "user"],
         456: [*COMMANDS, "stats", "user"],
-        789: [*COMMANDS, "admin"],
+        789: [*COMMANDS, "admin", "botcfg"],
     }
     assert usage_menu.admin_ids() == frozenset({123, 456})
     assert usage_menu.bs.admin_ids == [123, 789]
-    assert not {"admin", "stats", "user"} & COMMANDS.keys()
+    assert not {"admin", "botcfg", "stats", "user"} & COMMANDS.keys()

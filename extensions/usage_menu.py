@@ -20,6 +20,7 @@ async def set_admin_menu(client: Client) -> None:
             commands = [BotCommand(name, labels[bs.language]) for name, labels in COMMANDS.items()]
             if user_id in platform_admins:
                 commands.extend(BotCommand(name, labels[bs.language]) for name, labels in ADMIN_COMMANDS.items())
+                commands.append(BotCommand("botcfg", "全局运营设置（管理员）"))
             if user_id in usage_admins:
                 commands.extend(
                     [

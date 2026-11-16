@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.settings import Settings, SettingsScope
+from extensions.bot_settings import apply_global_setting_defaults
 from log import logger
 from repo.settings.migrations import REGISTRY
 from repo.settings.schema import CURRENT_SCHEMA_VERSION, DEFAULT_SETTINGS_CONFIG, SettingsConfig
@@ -76,7 +77,7 @@ class SettingsRepo:
         """获取最新完整配置"""
         migrated = await self.migrate(target)
         if not migrated:
-            return DEFAULT_SETTINGS_CONFIG
+            return _hydrate_config_patch({})
         return _hydrate_config_patch(migrated.config)
 
     async def _save_config_patch(self, target: SettingsTarget, config_patch: dict[str, Any]) -> Settings:
@@ -136,7 +137,8 @@ class SettingsRepo:
 
 
 def _hydrate_config_patch(config_patch: dict[str, Any]) -> SettingsConfig:
-    return SettingsConfig.model_validate(DEFAULT_SETTINGS_CONFIG.model_dump(mode="json") | config_patch)
+    defaults = apply_global_setting_defaults(DEFAULT_SETTINGS_CONFIG.model_dump(mode="json"))
+    return SettingsConfig.model_validate(defaults | config_patch)
 
 
 def _config_to_patch(config: SettingsConfig, base: SettingsConfig = DEFAULT_SETTINGS_CONFIG) -> dict[str, Any]:
