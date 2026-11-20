@@ -6,11 +6,10 @@ from typing import Any
 
 import pillow_heif
 from pyrogram import Client
-from pyrogram.handlers import ConnectHandler, DisconnectHandler
 from pyrogram.storage import SQLiteStorage
 from pyrogram.types import BotCommand
 
-from core import bs, on_connect, on_disconnect, ws
+from core import bs
 from db.engine import close_db
 from db.init import init_db
 from extensions.usage_menu import set_admin_menu
@@ -19,16 +18,12 @@ from log import logger, setup_logging
 from plugins.admin.alert import send_cookie_alert
 from plugins.helpers import COMMANDS
 from services import cookie_health, parse_cache
-from utils.event_loop import setup_optimized_event_loop
 
 pillow_heif.register_heif_opener()
 
 setup_logging(debug=bs.debug)
 if bs.debug:
     logger.enable("parsehub")
-
-setup_optimized_event_loop()
-loop = asyncio.new_event_loop()
 
 
 def setup_loop_exception_handler(loop: asyncio.AbstractEventLoop, cli: Client) -> None:
@@ -78,14 +73,12 @@ class Bot(Client):
             bot_token=self.cfg.bot_token,
             plugins={"root": "plugins"},
             proxy=self.cfg.bot_proxy,
-            loop=loop,
             workdir=self.cfg.sessions_path,
             storage_engine=storage,
         )
 
     async def start(self, *args: Any, **kwargs: Any) -> "Bot":
-        self.init_watchdog()
-        setup_loop_exception_handler(self.loop, self)
+        setup_loop_exception_handler(asyncio.get_running_loop(), self)
 
         logger.info("初始化数据库...")
         await init_db()
@@ -99,17 +92,12 @@ class Bot(Client):
         return self
 
     async def stop(self, *args: Any, **kwargs: Any) -> Client:
-        ws.exit_flag = True
         await super().stop(*args, **kwargs)
         await close_db()
         # 结束时清理下载残留
         if self.cfg.download_dir.exists() and not self.cfg.debug_skip_cleanup:
             shutil.rmtree(self.cfg.download_dir)
         return self
-
-    def init_watchdog(self) -> None:
-        self.add_handler(ConnectHandler(on_connect))
-        self.add_handler(DisconnectHandler(on_disconnect))
 
     async def set_menu(self) -> None:
         commands = await self.get_bot_commands()
